@@ -29,6 +29,7 @@ export async function truncateAll(sql: ReturnType<typeof createTestDb>['sql']): 
     truncate table
       person_vector_jobs, person_rejections, meme_subjects, persons, series,
       tag_jobs, reindex_jobs, import_items, import_batches, search_snapshots, sessions,
+      access_tokens, user_mcp_settings,
       user_favorites, user_ai_configs, config_tests, embed_config, image_embed_config,
       runtime_config, invite_codes, memes, users
     cascade

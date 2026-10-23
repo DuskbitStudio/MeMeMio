@@ -10,6 +10,7 @@
 | [architecture.md](architecture.md) | 技术栈、模块边界、数据流 | 动第一行代码之前 |
 | [environments.md](environments.md) | 环境变量、本地起服务 | 配本地环境 |
 | [deployment.md](deployment.md) | Docker Compose、单机多项目的命名隔离 | 部署或加一个同机项目 |
+| [mcp.md](mcp.md) | 把共享库接进 LLM 聊天客户端与 IM 机器人的只读 MCP 接口 | 要让 Claude / Cursor / 机器人检索表情包 |
 | [eval.md](eval.md) | 30 张图的评测集怎么做、怎么跑 | 改提示词、改词表、换模型之后 |
 | [fixtures.md](fixtures.md) | 测试图片与固定数据从哪来 | 写测试 |
 | [testing.md](testing.md) | 测什么、不测什么 | 写测试 |

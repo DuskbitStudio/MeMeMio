@@ -359,3 +359,62 @@ image_embed_config(
 - 物理删除时级联删 `meme_subjects` 那一行；人物因此一张图都不剩时，连同它的 `person_rejections` 一起删。
 - 人把一个人物的图全部移走（含被合并掉）时，该人物当场删除。
 - **系列**的图数 = 其下人物图数之和；人物数只数图数 ≥ 1 的。
+
+## §5.8 访问令牌
+
+> **状态：`proposed`**（2026-10-22）。[§10 MCP 接入](10-mcp.md) 的凭证，纯新增。管理端点见 [§6.8](06-endpoints.md#68-访问令牌)，安全规则见 [§10.3](10-mcp.md#103-鉴权与访问令牌)。
+
+```sql
+access_tokens(
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references users(id) on delete cascade,
+  name         text not null,            -- 设备/渠道标签，1–64 字，不要求唯一
+  prefix       text not null,            -- 展示用，令牌前 12 个字符（含 mcp_）
+  token_hash   text not null,            -- sha256(token) 十六进制
+  created_at   timestamptz not null default now(),
+  last_used_at timestamptz,              -- 从未使用为 null
+  expires_at   timestamptz,              -- null = 永不过期
+  revoked_at   timestamptz               -- 非空 = 已撤销
+);
+```
+
+**只存哈希，不存明文，也不存密文。** 令牌是 32 字节强随机值，SHA-256 足够；这比把它加密存起来少一层密钥管理——它本来就不需要被读回来。
+
+`token_hash` 上建唯一索引（校验时按它查），`user_id` 上建普通索引（列表与数量上限）。**不用现有的 `sessions` 表**：会话是浏览器生命周期、随请求变化；令牌是长期凭证、显式撤销，两者的清理与审计语义都不同。
+
+- `last_used_at` 的写必须节流（实现约束）：MCP 每个请求都可能命中一次令牌校验，逐请求 UPDATE 是写放大。
+- `revoked_at` / `expires_at` 非空的记录**保留**，用于回答"这个令牌什么时候没的"；列表接口只展示仍然有效的那些（[§6.8](06-endpoints.md#68-访问令牌)）。
+- 用户被物理删除时级联删除；这与 `sessions` 的 `on delete cascade` 同一条规则。
+
+## §5.9 MCP 设置
+
+> **状态：`accepted`**（2026-10-23）。新增能力，[§10 MCP 接入](10-mcp.md#1031-内容范围成人向默认关闭) 的内容范围与[过滤器](10-mcp.md#1032-过滤器按标签排除)设置。端点见 [§6.9](06-endpoints.md#69-mcp-设置)。
+
+```sql
+user_mcp_settings(
+  user_id      uuid primary key references users(id) on delete cascade,
+  allow_adult  boolean not null default false,   -- 默认关闭；只影响 MCP，不影响 Web
+  excluded     jsonb not null default '{}'::jsonb, -- 按维度存排除值；{} = 不过滤
+  updated_at   timestamptz not null default now()
+);
+```
+
+**没有行 = 全用默认值（`allow_adult = false`、`excluded = {}`）**，`PUT` 时惰性 upsert 一行；空表是正常状态，不是"未初始化"。
+
+`excluded` 的对外形状固定为七个数组（缺省为 `[]`）：
+
+```json
+{
+  "expressions": [], "emotions": [], "tones": [], "purposes": [],
+  "scenes": [], "tags": [], "ratings": []
+}
+```
+
+- 语义见 [§10.3.2](10-mcp.md#1032-过滤器按标签排除)：**命中任一即排除**。
+- `ratings` 只能是空数组；成人向由 `allow_adult` 单独控制，不能进过滤器（写入时校验）。
+- 值必须在词表内；非法值/未知维度 → `VALIDATION_FAILED`。
+- **没有行或空对象都表示不过滤**，不区分"未设置"和"清空"。
+
+**它与 `access_tokens` 是两层不同的东西：** 令牌是"谁能调"，设置是"调到什么范围"。一个用户的所有令牌共享同一个设置；v1 不做按令牌区分——那会把设置页变成每个令牌一个开关，而真实需求（家庭 bot / 私人 bot）还没出现。
+
+**只影响 MCP。** Web 端的搜索、浏览、收藏仍按 [§3.3](03-auth-permission.md#33-权限矩阵) 全库可读，不因这个开关隐藏任何图。

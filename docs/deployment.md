@@ -413,6 +413,17 @@ server {
 
 请求体上限不用调：导入只上传文件清单，图片本身由浏览器直传 R2，最大请求体约 1 MB（`api/src/app.ts` 的 `MAX_BODY_BYTES`），nginx 默认的 `client_max_body_size 1m` 刚好够。
 
+#### `/mcp` 与普通 REST 的差异
+
+MCP 与 `/api` 同源同端口，反代仍然用上面那一个 `location /` 就行。额外注意四点：
+
+- **TLS 由反代终结。** 公网域名需要 HTTPS：聊天客户端对远程地址一般要求 TLS，LINE 这类渠道强制两个公网 HTTPS URL；`api` 不提供证书。
+- **SSE 缓冲关、读超时 ≥120 秒。** 本服务的工具都是快操作、固定返回 JSON（[SPEC §10.2](../spec/10-mcp.md#102-端点与传输)），但 Streamable HTTP 允许请求级升级为 SSE，客户端探测也可能挂长连接；沿用上面的 `proxy_buffering off` 与 `proxy_read_timeout 120s`，**不要单独给 `/mcp` 调小**。
+- **请求体上限 256 KiB 由服务端执行（超了 413）。** nginx 默认的 `client_max_body_size 1m` 够用，**不要调到 256 KiB 以下**。
+- **带 `Origin` 的请求一律 403。** 这是有意拒绝浏览器内的 MCP 客户端，不是 CORS 配错；见 [MCP 接入](mcp.md)。
+
+**R2 公开桶是 MCP 的交付前提。** 工具返回的 `url` / `thumbUrl` 是 R2 公开地址，bucket 没开 Public Access 时聊天客户端和 IM 渠道都拿不到图；开通与格式要求见 §8.2。MCP **不需要新增环境变量**，默认挂载、没有开关。
+
 配完 reload 反代，确认：
 
 ```bash
@@ -480,6 +491,7 @@ docker compose up -d
 - [ ] 在浏览器里点一次「复制」——**剪贴板里是图，不是下载**。漏了 CORS 的 `GET` 时这一步会静默退化成下载（§8.3）
 - [ ] 起一次进程确认没有「R2 探活失败」——它是 R2 配错唯一会主动报出来的地方（§8.4）
 - [ ] 真导一张图，在浏览器里打开返回的 `url` 和 `thumbUrl`，**看到图**而不是 404
+- [ ] 用真实 MCP 客户端连一次 `/mcp`，能列出 5 个工具；不带令牌的请求返回 `401` 而不是 `404`（[MCP 接入](mcp.md)）
 - [ ] `CONFIG_ENC_KEY` 已离线备份到 Docker 和数据库之外的地方
 - [ ] `.env` 里 `NODE_ENV=production`，且站点走 HTTPS（§9.1：两者不匹配时登录后立刻 401）
 - [ ] 反代已配置指向 `${APP_SLUG}-app`，并设置了 `X-Forwarded-For`；反代前面**没有**再套一层 CDN（§9.3）

@@ -4,7 +4,9 @@
 
 ## §0.1 范围
 
-`api` 是业务 API 的唯一提供方，`web` 是唯一消费者。两者同域部署：`api` 挂载 `/api/*` 并托管 `web` 的静态构建产物，浏览器不跨域请求，会话使用 httpOnly cookie。
+`api` 是业务 API 的唯一提供方，`web` 是 REST 的唯一消费者。两者同域部署：`api` 挂载 `/api/*` 并托管 `web` 的静态构建产物，浏览器不跨域请求，会话使用 httpOnly cookie。
+
+`api` 同时提供**第二个外部接口**：只读的 MCP 端点 `/mcp`（[§10](10-mcp.md)），面向外部 LLM 客户端与 IM 机器人框架。它不替代 REST，也不改变 `web` 对 REST 的依赖；两类凭证（cookie 会话 / 访问令牌）互不通用。
 
 **库是共享的，不是每人一个。** 所有用户的上传进同一张 `memes` 表，检索时不按归属过滤。归属只用于写权限判断。这与常见的多租户 SaaS 相反，实现时不能照搬「每个查询都带 user_id」的直觉，理由见 [§9.1](09-decisions.md)。
 
@@ -43,6 +45,8 @@
 **状态标记记的是契约是否对齐，不记实现进度。** 两端可以按 `proposed` 的语义落代码——这是有意的选择，理由与代价见 [§9.28](09-decisions.md)——所以「标着 `proposed`」不等于「没实现」，反过来「代码跑起来了」也不该自动让某条转 `accepted`。
 
 明确标记 `proposed` 的：桌面端拖拽发送路径（[§9.2](09-decisions.md) 内）、各供应商的 `dimensions` 与 `json_object` 实际支持情况（[§9.7](09-decisions.md) 内）、敏感内容双通道（[§9.5](09-decisions.md)）、默认推荐配置与模型选型（[§9.8](09-decisions.md)）、[§9.12](09-decisions.md) 起的待验证项表、梗名别名层（[§9.18](09-decisions.md)），以及词表 v0.3.0 的具体词条（[§4.2](04-vocabulary.md)——它的升级门槛是 §9.12 表的 9.17，要评测集跑出结果）。这些要么依赖[供应商探测任务](../joint-tasks/2026-09-13-provider-spikes.md)，要么依赖[评测集任务](../joint-tasks/2026-09-13-eval-set.md)，两个都还没有结果。
+
+[MCP 接入（§10）](10-mcp.md) 已于 2026-10-22 转 `accepted`：两端实现落齐，api `typecheck` + 741/741 测试（含 3 个 MCP integration）、web `typecheck` + `build` 均通过。**真实客户端与 IM 渠道验收后转 `stable`**（[§10.7](10-mcp.md#107-兼容与状态)）；在那之前不要对外说「MCP 可接入」。
 
 （2026-09-26 的[检索与筛选合流](../_archive/joint-tasks/2026-09-26-检索筛选合一.md) 改的是 [§1.3](01-http.md)、[§6.3](06-endpoints.md) 与 [§2.2](02-errors.md)：它不依赖外部探测，当天两端确认后已转 `accepted`，不列在上面这串里。）
 

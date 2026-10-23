@@ -1,0 +1,1 @@
+ALTER TABLE "user_mcp_settings" ADD COLUMN "excluded" jsonb DEFAULT '{}'::jsonb NOT NULL;

@@ -78,6 +78,27 @@
       "when": 1790698282177,
       "tag": "0010_add_persons_and_series",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792677217500,
+      "tag": "0011_create_access_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792699641544,
+      "tag": "0012_create_user_mcp_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792734985754,
+      "tag": "0013_add_mcp_excluded",
+      "breakpoints": true
     }
   ]
 }

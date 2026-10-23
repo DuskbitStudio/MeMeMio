@@ -11,7 +11,7 @@ import { env } from '../env.js'
 import { log } from '../logger.js'
 
 /**
- * R2 对象存储。Cloudflare R2 走 S3 兼容协议。
+ * 对象存储。**生产走 Cloudflare R2，本地可以用任意 S3 兼容实现**（RustFS / MinIO）。
  *
  * ⚠️ **这一层的操作不能进数据库事务**（agents/rules/database.md §5）。R2 不在数据库里，
  * 事务回滚不会把对象变回来。正确顺序是「先写 R2，再写库」——失败时留下的是孤儿对象，
@@ -29,16 +29,54 @@ const UPLOAD_URL_TTL_SECONDS = 15 * 60
 /** 启动探活的超时。网络不通时进程要起不来，但不能吊死在启动上。 */
 const STARTUP_PROBE_TIMEOUT_MS = 8_000
 
-const R2_ENDPOINT = `https://${env.r2.accountId}.r2.cloudflarestorage.com`
+/**
+ * S3 endpoint。
+ *
+ * `R2_ENDPOINT` 没设时拼 Cloudflare 的正式地址——这是生产路径。覆盖口用于本地开发：
+ * 没有 Cloudflare 账户时用 RustFS / MinIO 这类 S3 兼容实现顶上，配合
+ * `R2_FORCE_PATH_STYLE=true`（非 AWS 实现通常必须 path-style 寻址）。
+ *
+ * 拼错地址在运行期**完全不报错**——预签名是纯本地 HMAC，凭证假的照样签得出格式
+ * 完美的 URL，所以 `assertR2Reachable` 那道探活是必须的。
+ */
+const R2_ENDPOINT = env.r2.endpoint ?? `https://${env.r2.accountId}.r2.cloudflarestorage.com`
 
-const client = new S3Client({
+const clientConfig = {
   region: 'auto',
   endpoint: R2_ENDPOINT,
+  forcePathStyle: env.r2.forcePathStyle,
+  /*
+   * ⚠️ 关掉 SDK 的自动校验和（AWS SDK v3 新版默认 `WHEN_SUPPORTED`）。
+   *
+   * 它会给**预签名 PUT** 也塞一个 `x-amz-checksum-crc32`（空 body 的校验值）进 URL。
+   * 浏览器 `fetch(uploadUrl, { method: 'PUT', body: file })` 不会带上与真实字节匹配的
+   * 校验头，S3 兼容实现按 URL 里的值校验时就是 BadDigest——上传必失败，而且错误发生在
+   * 浏览器与对象存储之间，api 日志里什么都看不到。
+   *
+   * 预签名直传的正确分工是：SDK 只签名，校验和由客户端自己决定带不带。所以这里
+   * 明确要 `WHEN_REQUIRED`（只有确实需要的操作才算），不是性能取舍。
+   */
+  requestChecksumCalculation: 'WHEN_REQUIRED' as const,
+  responseChecksumValidation: 'WHEN_REQUIRED' as const,
   credentials: {
     accessKeyId: env.r2.accessKeyId,
     secretAccessKey: env.r2.secretAccessKey,
   },
-})
+}
+
+const client = new S3Client(clientConfig)
+
+/**
+ * 签上传 URL 用的 client。
+ *
+ * 上传是**浏览器直传**（web/src/lib/api-imports.ts 的 uploadToR2 拿 URL 直接 PUT），
+ * 所以 URL 里的 host 必须是**浏览器能解析的地址**，不是 api 自己能连的地址。
+ * 容器里这两者不同：api 走 Docker 服务名（`s3:9000`），浏览器在宿主机上解析不了。
+ * 所以本地 S3 部署用 `R2_PUBLIC_ENDPOINT` 单独指定；正式 R2 两者本来就相同。
+ */
+const presignClient = env.r2PublicEndpoint === null
+  ? client
+  : new S3Client({ ...clientConfig, endpoint: env.r2PublicEndpoint })
 
 /**
  * 拼一个完整的对象键。**前缀必须带**（`R2_KEY_PREFIX` 以 / 结尾，env 校验保证），
@@ -105,7 +143,8 @@ export async function presignUpload(params: {
 }): Promise<{ uploadUrl: string; tempKey: string }> {
   const tempKey = tempKeyFor(params.batchId, params.fileName)
   const uploadUrl = await getSignedUrl(
-    client,
+    // 用浏览器可达的那个 client 签：URL 里的 host 必须是用户浏览器能解析的地址
+    presignClient,
     new PutObjectCommand({
       Bucket: env.r2.bucket,
       Key: key(tempKey),

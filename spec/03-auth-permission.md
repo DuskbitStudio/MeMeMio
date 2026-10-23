@@ -6,7 +6,9 @@
 
 邀请码注册。注册时消耗一个未使用且未过期的 `invite_codes` 记录，同一码不能重复使用。
 
-会话使用 httpOnly + SameSite=Lax cookie，前后端同域，不使用 Authorization header，不需要 CSRF token 以外的跨域处理。生产环境设置 `Secure`，本地开发不设置。
+会话使用 httpOnly + SameSite=Lax cookie，前后端同域，业务接口不使用 Authorization header，不需要 CSRF token 以外的跨域处理。生产环境设置 `Secure`，本地开发不设置。
+
+**MCP 端点是唯一例外**（[§10.3](10-mcp.md#103-鉴权与访问令牌)）：它使用个人访问令牌（`Authorization: Bearer`），**只认令牌、不认 cookie**；反过来 `/api/v1` 的任何接口都不接受 Bearer。两种凭证不互通，不因为一次请求带了令牌就给它浏览器会话身份。
 
 会话数据存 PostgreSQL，不引入 Redis——理由见 [§9.11](09-decisions.md)。
 
@@ -28,6 +30,7 @@
 | 操作 | 谁可以 |
 |---|---|
 | 搜索 / 浏览 / 使用 | 所有登录用户，**不做任何归属过滤** |
+| 使用 MCP 只读工具 | 所有用户，以访问令牌鉴权；可读范围与「搜索 / 浏览 / 使用」一致，且**只读**，见 [§10.3](10-mcp.md#103-鉴权与访问令牌) |
 | 上传 | 所有人，受存储配额限制 |
 | 收藏 / 取消收藏 | 所有人，写自己的 `user_favorites` |
 | 编辑描述与标签 | **所有人** |

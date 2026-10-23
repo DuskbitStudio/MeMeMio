@@ -749,3 +749,96 @@ GET /persons?q=塞西&series=none&named=true&minCount=2&cursor=…&limit=40
 **第一次配好不自动补跑。** 存量补跑由管理员点 `POST /admin/persons/reindex`：它把所有未软删、没有当前口径向量的图排进队列，**幂等**，响应 `{ enqueuedCount, ...status }`。与 `/admin/reindex` 不同的是它**每张图都是一次付费调用**，界面上点之前要说清条数和花谁的钱。配好之后新进来的图自动算，不用点。
 
 `GET /admin/persons/reindex/status` 与 [§6.5.4](#654-重建索引) 的状态同形：`{ running, total, done, stale, failed }`，来自库里的真实计数。**人物向量的重算不影响 `degraded`**——那个字段只说检索的向量路，人物不参与检索召回。
+
+## §6.8 访问令牌
+
+> **状态：`proposed`**（2026-10-22）。为 [§10 MCP 接入](10-mcp.md) 提供的令牌管理接口，纯新增。令牌的形态、存储与安全规则见 [§10.3](10-mcp.md#103-鉴权与访问令牌)。
+
+| 方法 | 路径 | 权限 |
+|---|---|---|
+| POST | `/access-tokens` | 本人 |
+| GET | `/access-tokens` | 本人 |
+| DELETE | `/access-tokens/{id}` | 本人 |
+
+**三个端点都要求 cookie 会话（[§3.1](03-auth-permission.md#31-会话)），不接受 Bearer。** 令牌是给 MCP 客户端用的；管理令牌仍然走浏览器。**没有管理员视图**——任何人只能看、建、撤销自己的令牌。
+
+### `POST /access-tokens`
+
+```
+{ name: "我的 Claude", expiresInDays?: 90 }
+```
+
+| 字段 | 规则 |
+|---|---|
+| `name` | 去首尾空白后 1–64 字，只用于显示。**不要求唯一**：两台设备起同一个名字是正常的 |
+| `expiresInDays` | 可选正整数，1–3650；不传 = 永不过期 |
+
+**每用户最多 10 个有效令牌（未撤销且未过期）**，超过返回 `VALIDATION_FAILED`。**不自动清理最旧的令牌**——那会让一台正在用的客户端突然 `401`，而用户不知道为什么；**也不把已过期的行计入名额**——那些行不在列表里，用户撤不掉，会把账号永久卡在满额。
+
+响应 **201**：
+
+```
+{
+  id, name, prefix,
+  token,                     // 完整令牌，只在这一次响应里出现
+  createdAt, expiresAt       // ISO 8601；expiresAt 可为 null
+}
+```
+
+- `token` 是完整值，**不会再有第二次机会**。响应带 `Cache-Control: no-store`。
+- `prefix` 是令牌前 12 个字符（含 `mcp_`），之后每次列表都只回它。
+- `token_hash` 永不出现。
+
+### `GET /access-tokens`
+
+```
+{
+  items: [ { id, name, prefix, createdAt, lastUsedAt, expiresAt } ]
+}
+```
+
+- 按 `createdAt desc` 排序。
+- **只返回未撤销且未过期的令牌**；过期 / 撤销的从列表消失（行保留在库里做审计，见 [§5.8](05-data-models.md#58-访问令牌)）。
+- `lastUsedAt` / `expiresAt` 可为 `null`（分别表示"从未用过"与"永久"）。
+- 不返回 `token`、`prefix` 之外的任何令牌材料，也不返回 `userId`。
+
+### `DELETE /access-tokens/{id}`
+
+204，**幂等**：对已撤销的令牌再调一次仍返回 204。只写 `revoked_at`，不物理删除。
+
+- 不存在、或不属于调用者的 id 一律 `NOT_FOUND`（不区分两种，避免探测别人的令牌 id）。
+- **撤销立即生效**：下一次 MCP 请求返回 `401`。
+
+### 错误码
+
+| code | 何时 |
+|---|---|
+| `UNAUTHENTICATED` | 没有有效 cookie 会话 |
+| `VALIDATION_FAILED` | `name` / `expiresInDays` 不合法，或已达 10 个上限 |
+| `NOT_FOUND` | 撤销目标不存在或不属于本人 |
+
+## §6.9 MCP 设置
+
+> **状态：`accepted`**（2026-10-23）。[§10.3.1](10-mcp.md#1031-内容范围成人向默认关闭) 的内容范围设置与 [§10.3.2](10-mcp.md#1032-过滤器按标签排除) 的过滤器设置，纯新增。
+
+| 方法 | 路径 | 权限 |
+|---|---|---|
+| GET | `/mcp/settings` | 本人（cookie 会话） |
+| PUT | `/mcp/settings` | 本人（cookie 会话） |
+| GET | `/mcp/filter` | 本人（cookie 会话） |
+| PUT | `/mcp/filter` | 本人（cookie 会话） |
+
+- **只认 cookie 会话**，不接受 Bearer；MCP 端点是只读的，不能改自己的设置。
+- `/mcp/settings` 响应固定 `{ allowAdult: boolean }`，默认 `false`。没有设置行时回默认值，不返回 404。
+- `PUT /mcp/settings` 请求体**恰好** `{ allowAdult: boolean }`；未知字段、非布尔值 → `VALIDATION_FAILED`。
+- `/mcp/filter` 响应固定：
+
+  ```
+  { excluded: { expressions: [], emotions: [], tones: [], purposes: [],
+                scenes: [], tags: [], ratings: [] } }
+  ```
+
+  七个维度**总是出现**（缺省为空数组）；`ratings` 只能是空数组——成人向由 `/mcp/settings` 单独控制。
+- `PUT /mcp/filter` 请求体**恰好** `{ excluded: {...} }`：未知维度、非数组、词表外的值、非空 `ratings` 都是 `VALIDATION_FAILED`；重复值按出现顺序去重。空数组等于不过滤。
+- **不提供管理员视图**：任何人只能改自己的设置。
+- 两个设置都只影响 MCP（[§10.3.1](10-mcp.md#1031-内容范围成人向默认关闭)、[§10.3.2](10-mcp.md#1032-过滤器按标签排除)），不影响 Web 端读路径。

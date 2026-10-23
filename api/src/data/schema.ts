@@ -731,3 +731,69 @@ export const personVectorJobs = pgTable(
     uniqueIndex('person_vector_jobs_meme_id_key').on(table.memeId),
   ],
 )
+
+// ── §5.8 访问令牌（MCP 凭证） ──────────────────────────────────────
+
+/**
+ * MCP 的个人访问令牌（PAT）。**只存哈希与展示用 prefix，不存明文，也不存密文**
+ * （SPEC §5.8 / §10.3）：令牌是 32 字节强随机值，SHA-256 足够，而且它本来就不需要
+ * 被读回来——存密文只会多一层密钥管理。
+ *
+ * **不用 `sessions` 表**：会话是浏览器生命周期、随请求变化；令牌是长期凭证、显式撤销，
+ * 两者的清理与审计语义都不同。判据与 §9.35 一致。
+ *
+ * `revoked_at` / `expires_at` 非空的记录**保留**（回答「这个令牌什么时候没的」），
+ * 列表接口只展示仍然有效的那些（§6.8）。校验路径必须同时判两个：
+ * `revoked_at is null` 且（`expires_at is null` 或 `expires_at > now()`）。
+ */
+export const accessTokens = pgTable(
+  'access_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** 设备 / 渠道标签，1–64 字，**不要求唯一**（两台设备同名是正常的，§6.8）。 */
+    name: text('name').notNull(),
+    /** 展示用：令牌前 12 个字符（含 `mcp_`）。列表只回它，完整值只在创建响应出现一次。 */
+    prefix: text('prefix').notNull(),
+    /** `sha256(token)` 十六进制。校验按它查，唯一索引就是那次查询的入口。 */
+    tokenHash: text('token_hash').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /** 从未使用为 null。写入必须节流（§5.8：逐请求 UPDATE 是写放大）。 */
+    lastUsedAt: timestamptz('last_used_at'),
+    /** null = 永不过期。 */
+    expiresAt: timestamptz('expires_at'),
+    /** 非空 = 已撤销，**立即生效**（下一次 MCP 请求 401，§10.3）。 */
+    revokedAt: timestamptz('revoked_at'),
+  },
+  (table) => [
+    // 校验时按 token_hash 查，必须唯一——哈希碰撞意味着两个令牌不可区分
+    uniqueIndex('access_tokens_token_hash_key').on(table.tokenHash),
+    // 列表与「每用户最多 10 个有效令牌」的计数
+    index('access_tokens_user_id_idx').on(table.userId),
+  ],
+)
+
+// ── §5.9 MCP 设置（内容范围） ──────────────────────────────────────
+
+/**
+ * MCP 的用户级设置。**没有行 = 全用默认值**（`allow_adult = false`），
+ * PUT 时惰性 upsert 一行（SPEC §5.9）。
+ *
+ * 只影响 MCP 工具是否返回成人向图；**不影响 Web 端的全库可读**（§3.3）。
+ * 与 `access_tokens` 是两层：令牌管"谁能调"，这里管"调到什么范围"。
+ */
+export const userMcpSettings = pgTable('user_mcp_settings', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  /** 默认关闭；打开后还要每次调用显式传 `allowAdult: true` 才返回（§10.3.1）。 */
+  allowAdult: boolean('allow_adult').notNull().default(false),
+  /**
+   * 按维度存排除值；`{}` = 不过滤（SPEC §5.9 / §10.3.2）。形状由
+   * `lib/mcp-filter.ts` 的 `normalizeMcpFilter` 归一化，这里只当 JSONB 存。
+   */
+  excluded: jsonb('excluded').notNull().default(sql`'{}'::jsonb`),
+  updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+})

@@ -1,4 +1,4 @@
-import { hc, type InferResponseType } from 'hono/client'
+import { hc, type InferRequestType, type InferResponseType } from 'hono/client'
 import type { AppType } from '@api/app'
 import { VOCAB_FIELDS, type VocabField } from './vocab'
 
@@ -550,4 +550,105 @@ export async function patchAdminUser(
   if (!res.ok) throw await toApiError(res)
   const data = (await res.json()) as { id: string; name: string; role: 'admin' | 'member'; storageQuotaBytes: string; createdAt: string }
   return { ...data, storageQuotaBytes: Number(data.storageQuotaBytes) }
+}
+
+// --- MCP 个人访问令牌（SPEC §6.8 / §10.3） ---------------------------------
+
+/**
+ * 路径段带连字符只能走下标访问（同上面的 `MemesClient`）。类型**从 `AppType` 派生**，
+ * 不手写请求 / 响应形状——api 改字段时这边要编译失败，那正是 Hono RPC 的全部价值。
+ */
+type AccessTokensClient = typeof api.api.v1['access-tokens']
+
+/** `GET /access-tokens` 的列表项。列表**只回 `prefix`**，永远拿不到完整令牌。 */
+export type AccessTokenItem = InferResponseType<AccessTokensClient['$get']>['items'][number]
+
+/** `POST /access-tokens` 的响应。**`token` 只在这里出现一次**（SPEC §6.8）。 */
+export type CreatedAccessToken = InferResponseType<AccessTokensClient['$post']>
+
+/** 创建请求体（`name` 1–64 字；不传 `expiresInDays` = 永不过期）。 */
+export type CreateAccessTokenInput = InferRequestType<AccessTokensClient['$post']>['json']
+
+/**
+ * 令牌列表（SPEC §6.8）。只返回未撤销未过期的，`createdAt desc`。
+ *
+ * 一次拉全量：每人最多 10 个，没有分页参数。**不要**按 `lastUsedAt` / `expiresAt` 在
+ * 客户端再排一次——顺序是契约（`createdAt desc`），重排会让「最新建的在哪」漂掉。
+ */
+export async function fetchAccessTokens(): Promise<AccessTokenItem[]> {
+  const res = await api.api.v1['access-tokens'].$get()
+  if (!res.ok) throw await toApiError(res)
+  const data = await res.json()
+  return data.items
+}
+
+/**
+ * 创建令牌（SPEC §6.8）。
+ *
+ * ⚠️ 返回的 `token` 是**完整令牌的唯一一次机会**：不写任何持久化（localStorage /
+ * sessionStorage / URL 都不行），只允许存活在「令牌已创建」弹窗的 state 里。弹窗一关，
+ * 那份 state 必须一起清掉，否则「只显示一次」就是假的。
+ */
+export async function createAccessToken(input: CreateAccessTokenInput): Promise<CreatedAccessToken> {
+  const res = await api.api.v1['access-tokens'].$post({ json: input })
+  if (!res.ok) throw await toApiError(res)
+  return res.json()
+}
+
+/**
+ * 撤销令牌（SPEC §6.8）：204，幂等，**立即生效**。
+ *
+ * `NOT_FOUND` 当成功处理：它意味着这个 id 已经不在有效列表里（别的标签页撤销过、
+ * 或本地列表过期了），而调用方要的结果都是「让这一行消失」。把它当成错误弹出来，
+ * 用户只会看到一个撤销不了的红条。
+ */
+export async function revokeAccessToken(id: string): Promise<void> {
+  const res = await api.api.v1['access-tokens'][':id'].$delete({ param: { id } })
+  if (res.ok) return
+
+  const err = await toApiError(res)
+  if (err.code === 'NOT_FOUND') return
+  throw err
+}
+
+// --- MCP 内容范围设置（SPEC §6.9 / §10.3.1） -------------------------------
+
+type McpSettingsClient = typeof api.api.v1.mcp
+
+/** `{ allowAdult }`，默认 false。类型从 AppType 派生，不手写。 */
+export type McpSettingsState = InferResponseType<McpSettingsClient['settings']['$get']>
+
+/** 读 MCP 设置（cookie 会话；MCP 端点本身只读，不能改自己的设置）。 */
+export async function fetchMcpSettings(): Promise<McpSettingsState> {
+  const res = await api.api.v1.mcp.settings.$get()
+  if (!res.ok) throw await toApiError(res)
+  return res.json()
+}
+
+/** 写 MCP 设置（SPEC §6.9）：只允许改 `allowAdult`，返回落库后的值。 */
+export async function updateMcpSettings(allowAdult: boolean): Promise<McpSettingsState> {
+  const res = await api.api.v1.mcp.settings.$put({ json: { allowAdult } })
+  if (!res.ok) throw await toApiError(res)
+  return res.json()
+}
+
+// --- MCP 排除过滤器（SPEC §6.9 / §10.3.2） --------------------------------
+
+type McpFilterClient = typeof api.api.v1.mcp.filter
+
+/** 七个维度的排除值；缺省是空数组，`ratings` 恒为空（成人向由内容范围控制）。 */
+export type McpFilterValues = InferResponseType<McpFilterClient['$get']>['excluded']
+
+/** 读过滤器（cookie 会话）。 */
+export async function fetchMcpFilter(): Promise<McpFilterValues> {
+  const res = await api.api.v1.mcp.filter.$get()
+  if (!res.ok) throw await toApiError(res)
+  return (await res.json()).excluded
+}
+
+/** 写过滤器（SPEC §6.9）：整体替换，返回落库后的值。 */
+export async function updateMcpFilter(excluded: McpFilterValues): Promise<McpFilterValues> {
+  const res = await api.api.v1.mcp.filter.$put({ json: { excluded } })
+  if (!res.ok) throw await toApiError(res)
+  return (await res.json()).excluded
 }

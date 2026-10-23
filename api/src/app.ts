@@ -8,6 +8,8 @@ import { authRoutes } from './routes/auth.js'
 import { adminRoutes } from './routes/admin.js'
 import { embedConfigRoutes, imageEmbedConfigRoutes, visionConfigRoutes } from './routes/config.js'
 import { memesRoutes } from './routes/memes.js'
+import { accessTokenRoutes } from './routes/access-tokens.js'
+import { mcpSettingsRoutes } from './routes/mcp-settings.js'
 import { personsRoutes } from './routes/persons.js'
 import { seriesRoutes } from './routes/series.js'
 import { importRoutes } from './routes/imports.js'
@@ -64,6 +66,13 @@ export const app = new Hono<{ Variables: RequestIdVariables }>()
   .route('/api/v1/persons', personsRoutes)
   .route('/api/v1/series', seriesRoutes)
   .route('/api/v1/memes', memesRoutes)
+  // MCP 的个人访问令牌（SPEC §6.8）。**管理端点走 cookie 会话**，与 `/mcp` 的
+  // Bearer 是两种凭证；这里挂进来不会把 MCP SDK 带进 web 的类型图——
+  // `/mcp` 子应用在 server.ts 分流，见 agents/rules/mcp.md §1
+  .route('/api/v1/access-tokens', accessTokenRoutes)
+  // MCP 内容范围设置（SPEC §6.9）。与 `/mcp` 端点无关：这是浏览器 cookie 会话，
+  // `/mcp` 仍在 server.ts 分流、只读
+  .route('/api/v1/mcp', mcpSettingsRoutes)
   .route('/api/v1/imports', importRoutes)
 
 app.onError(onError)

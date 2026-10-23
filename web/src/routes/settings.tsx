@@ -5,6 +5,7 @@ import { Button } from '../components/ui/button'
 import { Separator } from '../components/ui/separator'
 import { EmbedSettings } from '../features/settings/EmbedSettings'
 import { InviteSettings } from '../features/settings/InviteSettings'
+import { McpSettings } from '../features/settings/McpSettings'
 import { ReindexPanel } from '../features/settings/ReindexPanel'
 import { RetagPanel } from '../features/settings/RetagPanel'
 import { RuntimeSettings } from '../features/settings/RuntimeSettings'
@@ -47,6 +48,9 @@ import { VisionSettings } from '../features/settings/VisionSettings'
  */
 const SECTIONS = [
   { id: 'vision', label: '视觉模型', adminOnly: false },
+  // MCP 接入是所有人的分段（SPEC §10；文案契约见 §10.8），位置在视觉模型之后。
+  // 它是只读的外部接口入口，与视觉 / Embedding 那种「配置存储」不是一类，但同样属于「你的事」。
+  { id: 'mcp', label: 'MCP 接入', adminOnly: false },
   { id: 'invites', label: '邀请码', adminOnly: true },
   { id: 'embedding', label: 'Embedding', adminOnly: true },
   { id: 'runtime', label: '运行参数', adminOnly: true },
@@ -71,8 +75,8 @@ export function SettingsPage() {
         <h1 className="font-heading text-2xl font-semibold">设置</h1>
         <p className="text-sm text-muted-foreground">
           {isAdmin
-            ? '视觉模型是你自己的一份；邀请码、Embedding 与用户是全站的。'
-            : '视觉模型是你自己的一份，其余设置由管理员维护。'}
+            ? '视觉模型与 MCP 接入是你自己的一份；邀请码、Embedding 与用户是全站的。'
+            : '视觉模型与 MCP 接入是你自己的一份，其余设置由管理员维护。'}
         </p>
       </header>
 
@@ -86,6 +90,12 @@ export function SettingsPage() {
       </nav>
 
       <VisionSettings />
+
+      {/*
+        MCP 接入在视觉模型之后、管理员分隔线之前：它对所有登录用户可见，
+        管的是「你自己的个人访问令牌」（SPEC §6.8 只有本人可见，没有管理员视图）。
+      */}
+      <McpSettings />
 
       {isAdmin && (
         <>

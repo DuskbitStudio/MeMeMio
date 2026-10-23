@@ -17,6 +17,7 @@ Mememio 是一个邀请制的共享表情包检索服务。所有人的上传进
 | 理解某个设计为什么是这样 | [设计决策](spec/09-decisions.md) |
 | 接着当前工作继续做 | [当前任务](joint-tasks/README.md) |
 | 部署到自己的机器 | [部署手册](docs/deployment.md) |
+| 接入 LLM 聊天或 IM 机器人 | [MCP 接入](docs/mcp.md) |
 
 ## 工作区
 

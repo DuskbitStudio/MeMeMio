@@ -11,6 +11,7 @@
 | 碰打标队列、定时任务 | [queue.md](queue.md) |
 | 碰错误返回、日志、密钥 | [error-handling.md](error-handling.md) |
 | 碰环境变量、启动流程 | [env-validation.md](env-validation.md) |
+| 碰 MCP 端点、访问令牌、MCP 工具 | [mcp.md](mcp.md) |
 | 写测试 | [testing.md](testing.md) |
 
 按条件读正文，已完整读过且未变化的不重复读取。不一次加载全部。

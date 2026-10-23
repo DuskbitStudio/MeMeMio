@@ -4,6 +4,7 @@ import { db, waitForDatabase } from './data/db.js'
 import { checkMigrations } from './data/migration-state.js'
 import { env } from './env.js'
 import { log } from './logger.js'
+import { mcpApp } from './mcp/production.js'
 import { assertRuntimeFilesPresent, WEB_DIST_DIR } from './paths.js'
 import { startCleanupJob, stopCleanupJob } from './queue/cleanup.js'
 import { startPersonVectorWorker, stopPersonVectorWorker } from './queue/person-vector-worker.js'
@@ -77,8 +78,9 @@ async function main(): Promise<void> {
     log.info({ dir: WEB_DIST_DIR }, '没有 web 构建产物，只提供 API（开发态正常）')
   }
 
-  const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
+  const server = serve({ fetch: dispatchHttpRequest, port: env.port }, (info) => {
     log.info({ port: info.port, nodeEnv: env.nodeEnv }, 'HTTP 已启动')
+    log.info({ path: '/mcp' }, 'MCP 端点已挂载（POST /mcp，Authorization: Bearer）')
   })
 
   // worker 在 HTTP 之后起：迁移检查已经过了，且它不影响接口可用性。
@@ -119,6 +121,22 @@ async function main(): Promise<void> {
     ],
     exit: (code) => process.exit(code),
   })
+}
+
+/**
+ * `serve()` 的入口分流：`/mcp` 与 `/api/v1` **并列**，两套中间件栈互不影响。
+ *
+ * 为什么在这里分而不是把 MCP 挂进 `app.ts`：`web` 通过 `AppType` 消费 api 的类型，
+ * `app.ts` 的 import 图会整个进入 web 的 typecheck，而 MCP SDK 带 Node 类型与自己的一套
+ * wire 类型（`agents/rules/mcp.md §1`）。放在这里还有一个附带好处：`/mcp` 不需要项目
+ * 错误信封、CORS、静态产物回退，也不受全局 `bodyLimit` 影响——它有自己的那一套。
+ *
+ * **只认精确的 `/mcp`**（SPEC §10.2：地址固定带 /mcp 路径）。`/mcp/` 或 `/mcp/x`
+ * 落到 `app.fetch`，由它回 404 —— 不做「宽容匹配」：多一个能进来的路径就多一份要维护的行为。
+ */
+function dispatchHttpRequest(request: Request): Response | Promise<Response> {
+  if (new URL(request.url).pathname === '/mcp') return mcpApp.fetch(request)
+  return app.fetch(request)
 }
 
 /**

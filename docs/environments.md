@@ -20,6 +20,11 @@ R2_BUCKET=<bucket>
 R2_KEY_PREFIX=${APP_SLUG}/        # ← 共用 bucket 时必须，否则对象互相覆盖。以 / 结尾
 R2_PUBLIC_BASE_URL=https://pub-xxxx.r2.dev   # ← 必填，不带末尾 /，也不要把前缀拼进去
 
+# 本地 S3 兼容存储（可选；不设就走 Cloudflare R2）
+R2_ENDPOINT=http://mememio-s3:9000   # 设了 R2_ACCOUNT_ID 可以不填
+R2_FORCE_PATH_STYLE=true             # 非 AWS 实现通常必须 true
+R2_PUBLIC_ENDPOINT=http://127.0.0.1:19000  # 浏览器直传用；和容器内 endpoint 不同
+
 # 部署方提供的默认模型配置（用户未配置时使用）
 DEFAULT_VISION_BASE_URL / DEFAULT_VISION_API_KEY / DEFAULT_VISION_MODEL
 DEFAULT_EMBED_BASE_URL  / DEFAULT_EMBED_API_KEY  / DEFAULT_EMBED_MODEL
@@ -110,7 +115,7 @@ DETAIL: 建库时用的 collation 版本是 2.41，当前 OS 提供 2.36
 | 方案 | 适用 |
 |---|---|
 | 连真实 R2 的一个 dev bucket，`R2_KEY_PREFIX=dev-<你的名字>/` | 推荐，行为与生产一致 |
-| MinIO 容器 | 离线开发，但预签名 URL 的细节与 R2 有差异 |
+| RustFS / MinIO 容器（S3 兼容） | 离线开发。需要 `R2_ENDPOINT`（容器内地址）、`R2_FORCE_PATH_STYLE=true`、`R2_PUBLIC_ENDPOINT`（浏览器可达地址）；设了 `R2_ENDPOINT` 后 `R2_ACCOUNT_ID` 可以不填，`R2_PUBLIC_BASE_URL` 指向「公开读根 + 桶名」。预签名 URL 的签名算法与 R2 相同，差异主要在桶策略 / CORS 要自己配 |
 
 **不要做「本地存文件系统」的分支。** 那会让上传路径在本地和生产走两套代码，而上传路径恰恰是最难在本地复现问题的地方。
 

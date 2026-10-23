@@ -26,6 +26,9 @@ const env = parseEnv(process.env)   // 失败则 process.exit(1)
 | `DATABASE_URL` | 能解析成合法连接串 |
 | `R2_KEY_PREFIX` | 以 `/` 结尾（不带会导致对象键拼错） |
 | `R2_PUBLIC_BASE_URL` | **不**以 `/` 结尾（带了会拼出 `//`；键本身不带前导 `/`） |
+| `R2_ENDPOINT` | 可选。设了就是 S3 兼容实现（RustFS / MinIO），必须带 `http://` 或 `https://`；此时 `R2_ACCOUNT_ID` 可不填 |
+| `R2_PUBLIC_ENDPOINT` | 可选。浏览器直传用的 endpoint，必须带协议头；容器内地址与宿主可达地址不同时必须分开配 |
+| `R2_FORCE_PATH_STYLE` | 可选。显式 `true` 才开；非 AWS 实现通常必须，正式 R2 不能开 |
 | `DEFAULT_VISION_*` / `DEFAULT_EMBED_*` | **可以全空**，见 §4 |
 
 `CONFIG_ENC_KEY` 长度不对时 AES-GCM 会在第一次加密用户 key 时才报错——那时用户正在设置页点保存，看到的是一个莫名其妙的 500。

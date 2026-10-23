@@ -67,6 +67,40 @@ describe('parseEnv', () => {
     expect(result.errors.join('\n')).toContain('R2_KEY_PREFIX')
   })
 
+  it('R2_ENDPOINT 覆盖时可以不填 R2_ACCOUNT_ID，并解析 forcePathStyle', () => {
+    const source = validSource()
+    delete source['R2_ACCOUNT_ID']
+    source['R2_ENDPOINT'] = 'http://mememio-s3:9000'
+    source['R2_FORCE_PATH_STYLE'] = 'true'
+    source['R2_PUBLIC_ENDPOINT'] = 'http://127.0.0.1:19000'
+    const result = parseEnv(source)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.env.r2.accountId).toBe('')
+    expect(result.env.r2.endpoint).toBe('http://mememio-s3:9000')
+    expect(result.env.r2.forcePathStyle).toBe(true)
+    expect(result.env.r2PublicEndpoint).toBe('http://127.0.0.1:19000')
+  })
+
+  it('R2_ENDPOINT / R2_PUBLIC_ENDPOINT 不带协议头时失败', () => {
+    const badEndpoint = parseEnv({ ...validSource(), R2_ENDPOINT: 'mememio-s3:9000' })
+    expect(badEndpoint.ok).toBe(false)
+    if (!badEndpoint.ok) expect(badEndpoint.errors.join('\n')).toContain('R2_ENDPOINT')
+
+    const badPublic = parseEnv({ ...validSource(), R2_PUBLIC_ENDPOINT: '127.0.0.1:19000' })
+    expect(badPublic.ok).toBe(false)
+    if (!badPublic.ok) expect(badPublic.errors.join('\n')).toContain('R2_PUBLIC_ENDPOINT')
+  })
+
+  it('不设 R2_ENDPOINT 时 R2_ACCOUNT_ID 仍然必填（正式 R2 路径）', () => {
+    const source = validSource()
+    delete source['R2_ACCOUNT_ID']
+    const result = parseEnv(source)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join('\n')).toContain('R2_ACCOUNT_ID')
+  })
+
   it('DATABASE_URL 不是合法连接串时失败', () => {
     const result = parseEnv({ ...validSource(), DATABASE_URL: 'localhost:5432' })
     expect(result.ok).toBe(false)

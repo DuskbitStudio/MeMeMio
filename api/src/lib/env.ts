@@ -11,11 +11,22 @@
 export type NodeEnv = 'development' | 'production' | 'test'
 
 export type R2Config = {
+  /** 正式 R2 时必填；`R2_ENDPOINT` 覆盖时可以为空（本地 S3 兼容实现不认 account id）。 */
   accountId: string
   accessKeyId: string
   secretAccessKey: string
   bucket: string
   keyPrefix: string
+  /**
+   * S3 endpoint 覆盖口。为 `null` 时拼 Cloudflare 正式地址（生产主路径）；
+   * 设了就走任意 S3 兼容实现（本地 RustFS / MinIO）。见 docs/environments.md。
+   */
+  endpoint: string | null
+  /**
+   * 非 AWS 实现通常必须 path-style 寻址（`host/bucket/key`），否则签名 URL 会指向
+   * `bucket.host` 这种解析不了的虚拟主机名。
+   */
+  forcePathStyle: boolean
 }
 
 export type ProviderDefaults = {
@@ -35,6 +46,13 @@ export type Env = {
   r2: R2Config
   /** R2 公开访问根地址，不含末尾 /。由 storageKey 派生 url / thumbUrl 时使用。SPEC §5.2.6 */
   r2PublicBaseUrl: string
+  /**
+   * 预签名给**浏览器**用的 endpoint。为 `null` 时与 `r2.endpoint` 相同。
+   *
+   * 容器部署里这两者会不同：api 走 Docker 网络名（`s3:9000`），浏览器在宿主机上解析不了；
+   * 所以本地 S3 部署要把它设成宿主可达地址（如 `http://127.0.0.1:19000`）。
+   */
+  r2PublicEndpoint: string | null
   /** 部署方默认视觉配置。可以为 null —— 那时导入照常，图片入库为 tagStatus = pending。 */
   defaultVision: ProviderDefaults | null
   /** 部署方默认 embedding 配置。可以为 null —— 那时搜索降级为两路，degraded: true。 */
@@ -109,12 +127,28 @@ export function parseEnv(source: Record<string, string | undefined>): ParseEnvRe
     errors.push('R2_KEY_PREFIX 必须以 / 结尾，否则对象键会拼错')
   }
 
+  // S3 endpoint 覆盖口：设了说明在对接 S3 兼容实现（本地 RustFS / MinIO），那套不认
+  // account id；没设才是正式 R2，accountId 是拼 endpoint 的原料，必填。
+  const r2EndpointOverride = source['R2_ENDPOINT']?.trim() || null
+  if (r2EndpointOverride !== null && !/^https?:\/\//.test(r2EndpointOverride)) {
+    errors.push('R2_ENDPOINT 必须带 http:// 或 https:// 前缀')
+  }
+  const r2AccountId = r2EndpointOverride === null ? required('R2_ACCOUNT_ID') : ''
+
   const r2: R2Config = {
-    accountId: required('R2_ACCOUNT_ID'),
+    accountId: r2AccountId,
     accessKeyId: required('R2_ACCESS_KEY_ID'),
     secretAccessKey: required('R2_SECRET_ACCESS_KEY'),
     bucket: required('R2_BUCKET'),
     keyPrefix: r2KeyPrefix,
+    endpoint: r2EndpointOverride,
+    // 只有显式 true 才开；Cloudflare R2 走正式地址时不能开（会拼成 host/bucket/key）
+    forcePathStyle: source['R2_FORCE_PATH_STYLE']?.trim() === 'true',
+  }
+
+  const r2PublicEndpoint = source['R2_PUBLIC_ENDPOINT']?.trim() || null
+  if (r2PublicEndpoint !== null && !/^https?:\/\//.test(r2PublicEndpoint)) {
+    errors.push('R2_PUBLIC_ENDPOINT 必须带 http:// 或 https:// 前缀')
   }
 
   const r2PublicBaseUrl = required('R2_PUBLIC_BASE_URL')
@@ -139,6 +173,7 @@ export function parseEnv(source: Record<string, string | undefined>): ParseEnvRe
       configEncKey,
       r2,
       r2PublicBaseUrl,
+      r2PublicEndpoint,
       defaultVision,
       defaultEmbed,
       defaultImageEmbed,
