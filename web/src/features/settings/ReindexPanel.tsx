@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Progress } from '../../components/ui/progress'
 import { SettingsCard } from './SettingsCard'
+import { Tip } from './Tip'
 import { pollProblemText, usePolledStatus } from './use-poll-status'
 import { TOUCH } from './settings-ui'
 
@@ -142,7 +143,7 @@ export function ReindexPanel({ refreshToken }: Props) {
         </Button>
       </div>
       {/* 幂等，重复点不会让同一条记录重算两遍（SPEC §6.5.4），所以跑着的时候也不禁用 */}
-      <p className="text-sm text-muted-foreground">重复触发是安全的：服务端幂等，不会重复排队。</p>
+      <Tip title="重复触发是安全的：服务端幂等，不会重复排队。" />
 
       {/*
         这一次点击的结果，和下面的 `startError` 是一对（互斥，都在点击时先清空）。

@@ -3,10 +3,8 @@ import {
   BookOpenIcon,
   CopyIcon,
   FilterIcon,
-  InfoIcon,
   KeyRoundIcon,
   PlusIcon,
-  ShieldCheckIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
 import {
@@ -53,11 +51,11 @@ import { McpTokenCreateDialog } from './McpTokenCreateDialog'
 import { McpTokenCreatedDialog } from './McpTokenCreatedDialog'
 import { McpTokenRevokeDialog } from './McpTokenRevokeDialog'
 import { SettingsCard } from './SettingsCard'
+import { Tip } from './Tip'
 import {
   MCP_COPY,
   MCP_ENDPOINT_HINT_PARTS,
   MCP_INLINE_CODE,
-  MCP_NOTICE,
   mcpEndpoint,
 } from './mcp-copy'
 import { COPY_FAILED_TEXT, useCopyText } from './use-copy-text'
@@ -388,7 +386,7 @@ export function McpSettings() {
             创建令牌
           </Button>
         </div>
-        <p className="text-sm text-muted-foreground">{MCP_COPY.tokenHint}</p>
+        <Tip title={MCP_COPY.tokenHint} />
 
         {loading && <p className="text-sm text-muted-foreground">加载中…</p>}
 
@@ -584,20 +582,9 @@ export function McpSettings() {
         </ol>
       </div>
 
-      {/* 安全提示（SPEC §10.8）。NOTICE 配方、不是 Alert——它是说明不是警报 */}
-      <div className={cn(MCP_NOTICE, 'flex items-start gap-2.5')}>
-        <ShieldCheckIcon
-          aria-hidden="true"
-          className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-        />
-        <p>{MCP_COPY.securityNotice}</p>
-      </div>
-
-      {/* 边界脚注（SPEC §10.8） */}
-      <p className="flex items-start gap-2.5 text-sm text-muted-foreground">
-        <InfoIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-        <span className="min-w-0">{MCP_COPY.boundaryFootnote}</span>
-      </p>
+      {/* 安全提示与边界脚注（SPEC §10.8）。共用 `Tip` 面板——说明不是警报 */}
+      <Tip title={MCP_COPY.securityNotice} />
+      <Tip title={MCP_COPY.boundaryFootnote} />
 
       <McpTokenCreateDialog
         open={createOpen}

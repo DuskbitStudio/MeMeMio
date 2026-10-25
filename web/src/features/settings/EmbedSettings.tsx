@@ -22,10 +22,11 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { ConfigFields } from './ConfigFields'
 import { SettingsCard } from './SettingsCard'
+import { ContractTip, Tip } from './Tip'
 import { TestResultPanel } from './TestResultPanel'
 import { describeSaveError } from './save-error'
 import { EMBED_NOTICE } from './settings-copy'
-import { NOTICE, TOUCH } from './settings-ui'
+import { TOUCH } from './settings-ui'
 import { embedNotes, embedProbes } from './test-probes'
 import { useConfigForm } from './use-config-form'
 
@@ -147,8 +148,8 @@ export function EmbedSettings({ onReindexTriggered }: { onReindexTriggered: () =
             </p>
           </div>
 
-          {/* 契约文案，逐字（SPEC §9.9） */}
-          <pre className={NOTICE}>{EMBED_NOTICE}</pre>
+          {/* 契约文案，逐字（SPEC §9.9）。见 `ContractTip`：⚠️ 那句常显，其余收起 */}
+          <ContractTip text={EMBED_NOTICE} />
 
           <ConfigFields
             idPrefix="embed"
@@ -178,11 +179,7 @@ export function EmbedSettings({ onReindexTriggered }: { onReindexTriggered: () =
             </Button>
           </div>
 
-          {!form.tested && (
-            <p className="text-sm text-muted-foreground">
-              测试通过后才能保存。改了任一字段都要重新测。
-            </p>
-          )}
+          {!form.tested && <Tip title="测试通过后才能保存。改了任一字段都要重新测。" />}
 
           {form.phase.kind === 'failed' && (
             <Alert variant="destructive">

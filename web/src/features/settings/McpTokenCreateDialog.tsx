@@ -1,5 +1,4 @@
 import { type FormEvent, useEffect, useState } from 'react'
-import { TriangleAlertIcon } from 'lucide-react'
 import {
   createAccessToken,
   toStateError,
@@ -27,7 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select'
-import { MCP_COPY, MCP_NOTICE } from './mcp-copy'
+import { MCP_COPY } from './mcp-copy'
+import { Tip } from './Tip'
 
 /**
  * 创建令牌的弹窗（SPEC §6.8）。
@@ -193,13 +193,7 @@ export function McpTokenCreateDialog({
           </div>
 
           {/* 一次性提醒（SPEC §10.8）：建之前就说清，别等创建完才讲 */}
-          <div className={cn(MCP_NOTICE, 'flex items-start gap-2.5')}>
-            <TriangleAlertIcon
-              aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-            />
-            <p>{MCP_COPY.oneTimeNotice}</p>
-          </div>
+          <Tip tone="warning" title={MCP_COPY.oneTimeNotice} />
 
           {error && (
             <Alert variant="destructive">

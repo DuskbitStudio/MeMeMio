@@ -190,17 +190,6 @@ export const MCP_COPY = {
   filterSaveError: '过滤器保存失败',
 } as const
 
-/**
- * 设置页既有的 `NOTICE` 配方（`settings-ui.ts`），这里只保留**形状**：
- * `rounded-2xl border bg-muted/40 p-4`。
- *
- * 那一段是 `font-mono + whitespace-pre-wrap` 的契约原文面板；MCP 这几处要装图标与一句话，
- * 不是 `<pre>`，所以不直接复用那个常量，但**底色、圆角、内边距必须一致**——
- * 它表达的都是「这是一段说明」，而且**不能用 `Alert`**（自带 `role="alert"`，
- * 这里是说明不是警报，见 styling.md「文案要有承载物」）。
- */
-export const MCP_NOTICE = 'rounded-2xl border bg-muted/40 p-4 text-sm'
-
 /** 行内代码片段的样式（表格 / 步骤里的 `Authorization: Bearer …` 那一类）。 */
 export const MCP_INLINE_CODE =
   'rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs wrap-anywhere'

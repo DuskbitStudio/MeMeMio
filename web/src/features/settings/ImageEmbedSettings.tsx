@@ -22,10 +22,11 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { ConfigFields } from './ConfigFields'
 import { SettingsCard } from './SettingsCard'
+import { ContractTip } from './Tip'
 import { TestResultPanel } from './TestResultPanel'
 import { describeSaveError } from './save-error'
 import { IMAGE_EMBED_NOTICE } from './settings-copy'
-import { NOTICE, TOUCH } from './settings-ui'
+import { TOUCH } from './settings-ui'
 import { imageEmbedNotes, imageEmbedProbes } from './test-probes'
 import { useConfigForm } from './use-config-form'
 
@@ -175,7 +176,7 @@ export function ImageEmbedSettings({ onReindexTriggered }: { onReindexTriggered:
             ⚠️ 这一段**不是契约**：SPEC §9.9 还没有图片向量那一段正文，
             它是这边新写的，等总管裁定。见 `settings-copy.ts` 的文件头。
           */}
-          <pre className={NOTICE}>{IMAGE_EMBED_NOTICE}</pre>
+          <ContractTip text={IMAGE_EMBED_NOTICE} />
 
           <ConfigFields
             idPrefix="image-embed"

@@ -17,6 +17,7 @@ import { Progress } from '../../components/ui/progress'
 import { ApiError, fetchTagStatus, startRetag, type RetagResult, type TagStatusSummary } from '../../lib/api'
 import { TOUCH } from '../../lib/touch'
 import { SettingsCard } from './SettingsCard'
+import { Tip } from './Tip'
 import { pollProblemText, usePolledStatus } from './use-poll-status'
 
 /**
@@ -241,10 +242,15 @@ export function RetagPanel({ refreshToken }: Props) {
         那个接口幂等且免费，这个不幂等且花图片上传者的钱。这里如果也写一句安抚的话，
         就成了误导。
       */}
-      <p className="text-sm text-muted-foreground">
-        这一步会调用视觉模型重新打标，花的是<strong>图片上传者</strong>的配置和额度。
-        人工编辑过的图不会被覆盖。
-      </p>
+      <Tip
+        tone="warning"
+        title={
+          <>
+            这一步会调用视觉模型重新打标，花的是<strong>图片上传者</strong>的配置和额度。
+            人工编辑过的图不会被覆盖。
+          </>
+        }
+      />
 
       {startNote && (
         <p role="status" className="text-sm">

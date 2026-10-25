@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { CheckIcon, TriangleAlertIcon } from 'lucide-react'
+import { CheckIcon } from 'lucide-react'
 import type { CreatedAccessToken } from '../../lib/api'
 import { TOUCH } from '../../lib/touch'
-import { cn } from '../../lib/utils'
 import { Button } from '../../components/ui/button'
 import {
   Dialog,
@@ -22,8 +21,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog'
-import { bearerHeader, claudeDesktopConfig, MCP_COPY, MCP_NOTICE } from './mcp-copy'
+import { bearerHeader, claudeDesktopConfig, MCP_COPY } from './mcp-copy'
 import { COPY_FAILED_TEXT, useCopyText } from './use-copy-text'
+import { Tip } from './Tip'
 
 /**
  * 「令牌已创建」弹窗——**完整令牌在整个产品里唯一可见的地方**（SPEC §10.3 / §6.8）。
@@ -88,14 +88,8 @@ export function McpTokenCreatedDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
-          {/* 一次性提醒（SPEC §10.8）。NOTICE 配方，不是 Alert——它是说明不是警报 */}
-          <div className={cn(MCP_NOTICE, 'flex items-start gap-2.5')}>
-            <TriangleAlertIcon
-              aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-            />
-            <p>{MCP_COPY.oneTimeNotice}</p>
-          </div>
+          {/* 一次性提醒（SPEC §10.8）。`Tip` 面板——说明不是警报 */}
+          <Tip tone="warning" title={MCP_COPY.oneTimeNotice} />
 
           <div className="flex flex-col gap-1.5">
             <p className="text-sm font-medium">访问令牌</p>

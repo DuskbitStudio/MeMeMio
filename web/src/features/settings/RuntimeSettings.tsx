@@ -14,9 +14,10 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { SettingsCard } from './SettingsCard'
+import { ContractTip } from './Tip'
 import { describeSaveError } from './save-error'
 import { RUNTIME_NOTICE } from './settings-copy'
-import { NOTICE, TOUCH } from './settings-ui'
+import { TOUCH } from './settings-ui'
 
 /**
  * 设置页 · 运行参数（仅管理员，SPEC §5.6 / §6.5.5 / §9.26）。
@@ -101,12 +102,6 @@ function parseInputs(
  * `<pre>` 不解析 markdown，直接渲染出来就是两个字面星号。**不要**为了去掉这两个星号去改
  * 那份字符串——文案是契约，改它要回总管。
  */
-function renderNotice(text: string) {
-  return text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
-    i % 2 === 1 ? <strong key={i}>{part}</strong> : part,
-  )
-}
-
 export function RuntimeSettings() {
   const [config, setConfig] = useState<RuntimeConfig | null>(null)
   const [values, setValues] = useState<Record<FieldName, string> | null>(null)
@@ -209,8 +204,11 @@ export function RuntimeSettings() {
               : '这张表还没人改过，四个数都是代码默认值'}
           </p>
 
-          {/* 契约文案，逐字（settings-copy.ts）。缩进与分行是它的结构，不要拆成 <p> */}
-          <pre className={NOTICE}>{renderNotice(RUNTIME_NOTICE)}</pre>
+          {/*
+            契约文案，逐字（settings-copy.ts）。缩进与分行是它的结构；`ContractTip` 只切分
+            ⚠️ 那句当标题，`**新开的**` 的星号仍由它剥掉后加粗。
+          */}
+          <ContractTip text={RUNTIME_NOTICE} />
 
           {GROUPS.map((group) => (
             <fieldset key={group} className="flex w-full max-w-[30rem] flex-col gap-3">

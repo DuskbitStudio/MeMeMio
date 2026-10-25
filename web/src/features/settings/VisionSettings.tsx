@@ -15,10 +15,11 @@ import { Button } from '../../components/ui/button'
 import { Separator } from '../../components/ui/separator'
 import { ConfigFields } from './ConfigFields'
 import { SettingsCard } from './SettingsCard'
+import { ContractTip, Tip } from './Tip'
 import { TestResultPanel } from './TestResultPanel'
 import { describeSaveError } from './save-error'
 import { VISION_NOTICE } from './settings-copy'
-import { NOTICE, TOUCH } from './settings-ui'
+import { TOUCH } from './settings-ui'
 import { visionProbes } from './test-probes'
 import { useConfigForm } from './use-config-form'
 
@@ -154,15 +155,18 @@ export function VisionSettings() {
 
             {advanced && (
               <div id="vision-advanced" className="flex flex-col gap-4 rounded-2xl border p-4">
-                {/* 契约文案，逐字（SPEC §9.9）。渲染成 <pre> 以保留它的分段结构 */}
-                <pre className={NOTICE}>{VISION_NOTICE}</pre>
+                {/*
+                  契约文案，逐字（SPEC §9.9）。`ContractTip` 只改构图：⚠️ 那句留在
+                  标题上常显，接口要求 / 推荐 默认收起。字符串本身一个字没动。
+                */}
+                <ContractTip text={VISION_NOTICE} />
 
                 {/*
                   上面那段契约文案里提到「副通道」，但这一版没有对应的输入框。
                   这一行**在 <pre> 之外**，是界面现状说明，不是契约文案的一部分——
                   它解释用户为什么找不到那个框，不改变上面一个字。§9.5 落地后删掉这一行。
                 */}
-                <p className="text-sm text-muted-foreground">副通道的配置入口尚未开放。</p>
+                <Tip title="副通道的配置入口尚未开放。" />
 
                 <ConfigFields
                   idPrefix="vision"
@@ -192,11 +196,7 @@ export function VisionSettings() {
                   </Button>
                 </div>
 
-                {!form.tested && (
-                  <p className="text-sm text-muted-foreground">
-                    测试通过后才能保存。改了任一字段都要重新测。
-                  </p>
-                )}
+                {!form.tested && <Tip title="测试通过后才能保存。改了任一字段都要重新测。" />}
 
                 {form.phase.kind === 'failed' && (
                   <Alert variant="destructive">
