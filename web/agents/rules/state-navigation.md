@@ -59,8 +59,8 @@
 | `/` | 首页，**入口页**：搜索框只负责把人送到 `/browse?q=`，自己不搜、不渲染结果。主体是随机图墙 + 两条 rail + 待处理状态条（SPEC §9.30）。带 `?q=` 进来的一律重定向到 `/browse?q=` |
 | `/browse` | 列表。**检索与筛选合一**：`?q=` 与七个词表维度同串（§6）。**全应用唯一的一条列表** |
 | `/import` | 导入 |
-| `/settings` | 设置。**管理员分段也在这里**（邀请码 / Embedding / 用户），见 [settings-ux.md §2](settings-ux.md) |
-| `/admin/*` | 旧地址，重定向到 `/settings` 的对应锚点 |
+| `/settings` | 设置。左侧分区导航、一次只显示一段，分区地址是 `#hash`（`#vision` / `#mcp` / `#invites` / `#embedding` / `#runtime` / `#retag` / `#users`，后五个仅管理员）；不带或不认识的 hash 落在 `#vision`。见 [settings-ux.md §2](settings-ux.md) |
+| `/admin/*` | 旧地址，重定向到 `/settings` 的对应分区（`/admin/invites` → `#invites`，`users`、`embedding` 同理） |
 | `/login` | 登录 / 注册 |
 
 管理员分段对普通用户**不渲染**，**但那只是体验**——真正的权限在服务端。不要因为前端藏了入口就认为安全。

@@ -121,7 +121,6 @@ export function EmbedSettings({ onReindexTriggered }: { onReindexTriggered: () =
 
   return (
     <SettingsCard
-      id="embedding"
       title="Embedding 模型（全站）"
       description="检索用的向量由它生成。这份配置对所有用户生效，换掉它要重算全库。"
       action={<Badge>全站生效</Badge>}

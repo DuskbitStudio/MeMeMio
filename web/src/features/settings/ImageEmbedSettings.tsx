@@ -139,7 +139,6 @@ export function ImageEmbedSettings({ onReindexTriggered }: { onReindexTriggered:
 
   return (
     <SettingsCard
-      id="image-embed"
       title="图片向量（全站）"
       description="人物识别与聚类靠它：每张图算一个向量，向量相近的图会被归到同一个人物。这份配置对所有用户生效，换掉它要重算全库。"
       action={<Badge>全站生效</Badge>}

@@ -136,9 +136,10 @@ function PageFallback() {
  *   · 本条自己的身高（`h-(--app-header-h)`）；
  *   · 浏览页外壳被钉成 `100svh − 顶栏`（`routes/browse.tsx`；那一页试过 `sticky`
  *     左栏，实测「结果列比视口矮时可粘余量为 0」，第三稿改成的钉高布局）；
- *   · `SettingsCard` 的 `scroll-mt`（`#invites` 这类锚点的落点）——**这一处按档分**：
- *     手机档顶栏还盖着窗口滚动的页面，要加 56；md 以上页面滚的是内容区、顶栏是它的
- *     兄弟节点不是盖在它上面，那一档只有 16；
+ *   · 页内 `scrollIntoView` 的落点（`scroll-mt`）——**这一项按档分**：手机档顶栏还盖着
+ *     窗口滚动的页面，要加 56；md 以上页面滚的是内容区、顶栏是它的兄弟节点不是盖在它
+ *     上面，那一档只有 16。（原先的实例是设置页长页的锚点，2026-10-25 设置页改成一次一段、
+ *     切段即回顶，那一处撤了；将来再有就照这两档算。）
  *   · toast 避让顶栏的 `offset.top`（`components/ui/sonner.tsx`）。
  * （**三处抽屉不在这张表里**：它们在 Radix 那一层、压得住顶栏，所以按注册表原样全高，
  * 见下面 `z-index` 那段。）
@@ -242,7 +243,7 @@ function AppLayout() {
               条」定的——`overflow-y` 在有条时是 `scroll`、没条时**是 `hidden`**
               （`@radix-ui/react-scroll-area` 的 `ScrollAreaViewport`）。默认的 `type="hover"`
               要 `pointerenter` 才挂上条，于是**指针没进过内容区之前这一页根本不能滚**：
-              键盘 / PageDown / `scrollIntoView`（`/settings#invites` 那条锚点）全都不动，
+              键盘 / PageDown / `scrollIntoView`（设置页 MCP 段滚到 `#mcp-content-scope` 那条）全都不动，
               **而且不报任何错**。`type="always"` 一进页面就挂条，首帧起就是 `scroll`，
               与它替下来的原生窗口滚动行为逐项一致。滑块仍然是**真溢出时才画**
               （`hasThumb`：`viewport/content` 落在 (0,1) 之间才有），所以短页面不会多出一根。

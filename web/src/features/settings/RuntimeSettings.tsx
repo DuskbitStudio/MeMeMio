@@ -183,7 +183,6 @@ export function RuntimeSettings() {
 
   return (
     <SettingsCard
-      id="runtime"
       title="运行参数"
       description="打标与导入两条线的并发上限。改完不用重启，对新开的任务生效。"
       /*

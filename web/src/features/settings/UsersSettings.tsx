@@ -28,7 +28,7 @@ import { TOUCH } from './settings-ui'
 /**
  * 设置页 · 用户（仅管理员可见的分段，原 `/admin/users` 整页）。
  *
- * 和 [InviteSettings] 一样，加载态在卡片内部 —— 锚点 `#users` 要一直在。
+ * 和 [InviteSettings] 一样，加载态在卡片内部 —— 切到 `#users` 这一段时标题要立刻在。
  */
 
 type RowState = {
@@ -121,7 +121,6 @@ export function UsersSettings() {
 
   return (
     <SettingsCard
-      id="users"
       title="用户"
       description="角色决定权限，存储配额决定这个账号能占用多少空间。"
       action={!loading && !error && <Badge variant="secondary">{users.length} 人</Badge>}

@@ -100,7 +100,6 @@ export function VisionSettings() {
 
   return (
     <SettingsCard
-      id="vision"
       title="视觉打标模型"
       description="你导入的图片由这组模型打标。不填就用部署方的默认配置，那是经过验证的。"
       action={

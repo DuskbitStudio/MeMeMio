@@ -331,7 +331,6 @@ export function McpSettings() {
 
   return (
     <SettingsCard
-      id="mcp"
       title="MCP 接入"
       description={MCP_COPY.cardDescription}
       action={<Badge variant="outline">只读</Badge>}

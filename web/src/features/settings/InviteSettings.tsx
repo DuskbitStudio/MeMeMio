@@ -22,8 +22,8 @@ import { TOUCH } from './settings-ui'
 /**
  * 设置页 · 邀请码（仅管理员可见的分段，原 `/admin/invites` 整页）。
  *
- * 加载态和错误态渲染在卡片**里面**而不是整块替换掉它：这一段挂着锚点 `#invites`，
- * 从 `/admin/invites` 跳过来时标题要立刻在，不能等表格拉回来才出现。
+ * 加载态和错误态渲染在卡片**里面**而不是整块替换掉它：从 `/admin/invites` 跳到
+ * `/settings#invites`、或点左栏切到这一段时，标题要立刻在，不能等表格拉回来才出现。
  *
  * 前端只管呈现，权限在服务端（state-navigation.md §4）。
  */
@@ -103,7 +103,6 @@ export function InviteSettings() {
 
   return (
     <SettingsCard
-      id="invites"
       title="邀请码"
       description="生成注册用的邀请码，可以设过期时间。"
       action={!loading && !error && <Badge variant="secondary">{invites.length} 个</Badge>}

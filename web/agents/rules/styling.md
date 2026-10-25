@@ -208,8 +208,7 @@ GPT 图片墙那种）。落点是 `components/MemeCard.tsx` 的 `REVEAL_ON_HOVE
 | 顶栏自己（`App.tsx`） | `h-(--app-header-h)`，另带 `sticky top-0 z-20 bg-background` |
 | 浏览页（`routes/browse.tsx`） | md 以上**页面不滚动**：容器 `md:h-[calc(100svh_-_var(--app-header-h))]`，配 `md:-my-6`（抵消外壳 `p-6`）与 `md:py-6`（加回来）；两列各自 `overflow-y-auto`（2026-09-22 第二稿，此前是筛选列 `sticky top-…` + `max-h-[…]`——那条只在结果列比视口高时才钉得住，见该文件头部推导） |
 | 三处抽屉（导航抽屉 `ui/sidebar.tsx`、编辑侧边栏 `MemeEditPanel.tsx`、筛选抽屉 `BrowseFilterSheet.tsx`） | **不在这张表里**——它们在 Radix 那层（`z-50`）、压得住顶栏，按注册表原样全高（`inset-y-0`）。2026-09-22 当天曾各写一段 `data-[side=*]:top-(--app-header-h) bottom-0 h-auto`，随顶栏收回 `z-20` 一起删掉了 |
-| `SettingsCard`（锚点落点） | `scroll-mt-[calc(var(--app-header-h)_+_1rem)]` |
-| `SettingsCard`（锚点落点） | `scroll-mt-[calc(var(--app-header-h)_+_1rem)]` |
+| ~~`SettingsCard`（锚点落点）~~ | 2026-10-25 撤了：设置页改成一次一段、切段即回顶，卡片不再是锚点目标。将来再有「滚到某个元素」的落点，`scroll-mt` 照下面「按档分」那条算 |
 
 **新写任何「贴视口顶边」的 sticky / 锚点 / `scroll-mt`，先减掉这个值。** 漏了不报错：
 top 写 0 的元素会滑到顶栏底下（顶栏有实色底，压得住它，只是看不见了），
@@ -375,9 +374,9 @@ Radix 浮层条在同一屏上不像一套。
 
 | 事 | 为什么 |
 |---|---|
-| **`type="always"` 是必需的** | Radix 的 viewport `overflow-y` 是「挂着条就 `scroll`、没条就 **`hidden`**」。`hover` / `scroll` 都要等 `pointerenter` 才挂条，于是指针没进过内容区之前**这一页根本不能滚**：键盘 / PageDown / `scrollIntoView`（`/settings#invites`）全都不动，**而且不报错**。滑块仍是真溢出时才画，短页面不会多出一根 |
+| **`type="always"` 是必需的** | Radix 的 viewport `overflow-y` 是「挂着条就 `scroll`、没条就 **`hidden`**」。`hover` / `scroll` 都要等 `pointerenter` 才挂条，于是指针没进过内容区之前**这一页根本不能滚**：键盘 / PageDown / `scrollIntoView`（设置页 MCP 段的 `#mcp-content-scope`）全都不动，**而且不报错**。滑块仍是真溢出时才画，短页面不会多出一根 |
 | **把 Radix 那层表壳压回块级** | `[&>[data-slot=scroll-area-viewport]>div]:block!`。Radix 在 viewport 里套一层行内 `display:table`，表盒宽度上限是内容的 **min-content**——首页两条 rail 的行是 `shrink-0` 的横排，它的 min-content 会顶上来：实测 1264 窗口下首页内容层被撑到 **1200px**（其余页面都是 1008），`max-w-6xl` 那层跟着按 1152 排、右半边被裁。压回块级后是 960，与改版前一致 |
-| **「比顶栏低」的补偿按档分** | 顶栏在 md 以上是滚动区的**兄弟节点**，不再盖在内容上——`SettingsCard` 的 `scroll-mt` 因此是「手机档 `--app-header-h + 1rem`、md 档只有 `1rem`」。留着那 56px 不报错，只是锚点每次多推出一截空白（实测 128px → 72px）。同类的还有 `index.css` 里 `--app-header-h` 那份清单 |
+| **「比顶栏低」的补偿按档分** | 顶栏在 md 以上是滚动区的**兄弟节点**，不再盖在内容上——`scroll-mt` 因此是「手机档 `--app-header-h + 1rem`、md 档只有 `1rem`」。留着那 56px 不报错，只是落点每次多推出一截空白（当年设置页锚点实测 128px → 72px；那处 2026-10-25 随一次一段撤了）。同类的还有 `index.css` 里 `--app-header-h` 那份清单 |
 
 ⚠️ **浏览页不受影响，也不该受影响**：那一页 md 以上的高度是钉死的（`100svh − 顶栏`，
 `routes/browse.tsx` 里那套算式），正好等于滚动区的视口高，所以它**不会**多出一根页面条
