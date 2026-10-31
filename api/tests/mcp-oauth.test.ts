@@ -40,6 +40,8 @@ const { createMcpApp } = await import('../src/mcp/app.js')
 const { authenticateMcpRequest } = await import('../src/mcp/auth.js')
 const { buildMcpServer } = await import('../src/mcp/server.js')
 const { createTtlCache } = await import('../src/mcp/cache.js')
+const { countMcpCallsToday } = await import('../src/data/mcp-call-logs.js')
+const { createTestAudit } = await import('./helpers/mcp-audit.js')
 const { resetRateLimits } = await import('../src/middleware/rate-limit.js')
 const { resetTokenTouchThrottle } = await import('../src/mcp/auth.js')
 const { accessTokens, oauthGrants } = await import('../src/data/schema.js')
@@ -193,9 +195,14 @@ async function fullFlow(options: {
 function mcpApp() {
   return createMcpApp({
     authenticate: authenticateMcpRequest,
-    buildServer: (ctx) => buildMcpServer(ctx, { db, cache: createTtlCache() }),
+    buildServer: (ctx) => buildMcpServer(ctx, {
+      db,
+      cache: createTtlCache(),
+      audit: createTestAudit(db),
+    }),
     onHandlerError: () => {},
     publicOrigin: ORIGIN,
+    countDailyCalls: (budgetKey) => countMcpCallsToday(budgetKey, db),
   })
 }
 

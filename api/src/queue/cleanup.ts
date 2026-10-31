@@ -1,4 +1,8 @@
 import {
+  countExpiredMcpCallLogs,
+  deleteExpiredMcpCallLogs,
+} from '../data/mcp-call-logs.js'
+import {
   countExpiredOAuthArtifacts,
   deleteExpiredOAuthArtifacts,
 } from '../data/oauth.js'
@@ -93,5 +97,22 @@ async function sweep(): Promise<void> {
     }
   } catch (error) {
     log.error({ err: error }, '清理过期 OAuth 凭证失败，下轮再试')
+  }
+
+  /*
+   * MCP 调用审计：保留 90 天（SPEC §5.11）。**审计只有保留期，没有软删**——
+   * 到点就物理删除，用户看不到「已删除的调用记录」，`GET /mcp/logs` 也从不提示。
+   *
+   * 它同时是日预算的计数来源（§10.11），所以删早了会让预算提前归零：90 天比一天
+   * 长得多，正常不会撞上；真要撞上，那时的调用量也早就不受日预算约束了。
+   */
+  try {
+    const due = await countExpiredMcpCallLogs()
+    if (due > 0) {
+      log.info({ due }, '清理过期的 MCP 调用审计')
+      await deleteExpiredMcpCallLogs()
+    }
+  } catch (error) {
+    log.error({ err: error }, '清理 MCP 调用审计失败，下轮再试')
   }
 }

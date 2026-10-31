@@ -113,6 +113,13 @@
       "when": 1793432960894,
       "tag": "0015_add_oauth_grant_redirect_uri",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793445987597,
+      "tag": "0016_create_mcp_call_logs",
+      "breakpoints": true
     }
   ]
 }

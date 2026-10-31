@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import {
   bigint,
+  bigserial,
   boolean,
   check,
   customType,
@@ -946,5 +947,50 @@ export const oauthRefreshTokens = pgTable(
   (table) => [
     // 撤销 grant 时按它删；列表算「最晚到期」也按它聚合
     index('oauth_refresh_tokens_grant_id_idx').on(table.grantId),
+  ],
+)
+
+// ── §5.11 MCP 调用日志 ──────────────────────────────────────────────
+
+/**
+ * MCP 的调用审计与日预算底账（SPEC §5.11 / §10.11）。
+ *
+ * 每完成一次 `tools/call` 写一行：谁、用哪个令牌、调了什么、检索原文、成功与否。
+ * **不存任何令牌值**——只存 `token_id`（日志纪律同 §10.3）。`id` 用 `bigserial`：
+ * 这是纯增长的事件表，uuid 主键只会白占索引空间。
+ *
+ * `budget_key` 是**文本、不设外键**：PAT 用 `token_id`，OAuth 令牌用 `grant_id`
+ * （访问令牌每小时刷新换一行，按行计预算会每小时清零，§10.11）。同一行里 `token_id`
+ * 被物理删除后 `budget_key` 仍留着字符串——历史计数不受影响，且那些行已在 90 天窗口内。
+ *
+ * `query_text` 是唯一的用户输入原文列，**本人可见、他人（含 admin）读出来是 null**。
+ * 这不是列级加密，是查询层的投影规则：`scope=all` 的 SQL 里用 `case when user_id = 我
+ * then query_text end`，原文本人之外根本不离开数据库（§6.11）。
+ */
+export const mcpCallLogs = pgTable(
+  'mcp_call_logs',
+  {
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** 用哪个令牌调的；令牌行物理删除后为 null（§6.11 显示「已删除的令牌」）。 */
+    tokenId: uuid('token_id').references(() => accessTokens.id, { onDelete: 'set null' }),
+    /** 计日预算的键：PAT = `token_id`，OAuth = `grant_id`。 */
+    budgetKey: text('budget_key').notNull(),
+    /** `tools/call` 的工具名。只记工具调用，握手与列工具不落库（§10.11）。 */
+    tool: text('tool').notNull(),
+    /** 检索原文；只有 `search_memes` / `pick_meme_for_reply` 有。 */
+    queryText: text('query_text'),
+    /** `'ok' | 'error'`。工具返回 `isError` 也算 error。 */
+    outcome: text('outcome').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // 审计页：按人倒序翻页（§6.11）
+    index('mcp_call_logs_user_time_idx').on(table.userId, table.createdAt.desc()),
+    // 日预算：按 budget_key 数当日条数（§10.11 的唯一热路径查询）
+    index('mcp_call_logs_budget_time_idx').on(table.budgetKey, table.createdAt),
+    check('mcp_call_logs_outcome_check', sql`${table.outcome} in ('ok', 'error')`),
   ],
 )

@@ -1,8 +1,11 @@
-import { McpServer, type McpRequestContext } from '@modelcontextprotocol/server'
+import { McpServer, type McpRequestContext, type RegisteredTool } from '@modelcontextprotocol/server'
 import type { Db } from '../data/db.js'
+import type { NewMcpCallLog } from '../data/mcp-call-logs.js'
 import { mcpRequestIdOf } from './app.js'
+import { actorOf } from './auth.js'
 import type { TtlCache } from './cache.js'
 import type { SearchToolResult } from './search.js'
+import { TOOL_NAMES } from './tool-names.js'
 import { registerGetMemeImage } from './tools/get-meme-image.js'
 import { registerListVocab } from './tools/list-vocab.js'
 import { registerPickMemeForReply } from './tools/pick-meme-for-reply.js'
@@ -41,6 +44,93 @@ export type McpServerDeps = {
   db: Db
   /** 检索结果的进程内缓存（SPEC §10.6）。由 production 持有，跨请求存活。 */
   cache: TtlCache<SearchToolResult>
+  /** 调用审计（SPEC §10.11）。**失败只降级**，绝不影响工具结果。 */
+  audit: McpAuditDeps
+}
+
+/**
+ * 审计接缝（§10.11）。生产注入 `data/mcp-call-logs.insertMcpCallLog`；
+ * 测试注入会抛异常的写实现来验「写日志失败不拦请求」。
+ */
+export type McpAuditDeps = {
+  write(entry: NewMcpCallLog): Promise<void>
+  /** 写失败的上报。只记 `requestId` / `tokenId`——令牌值永远不进日志（§10.3）。 */
+  onError(error: unknown, meta: { requestId: string; tokenId: string }): void
+}
+
+/** 检索原文只对这两个工具有意义（§5.11）；参数名分别是 `query` / `message`。 */
+const QUERY_ARG: Readonly<Record<string, string>> = {
+  [TOOL_NAMES.searchMemes]: 'query',
+  [TOOL_NAMES.pickMemeForReply]: 'message',
+}
+
+/** 从工具参数里取检索原文。取不到就 null，**不猜、不序列化整个参数**。 */
+function queryTextOf(tool: string, args: unknown): string | null {
+  const key = QUERY_ARG[tool]
+  if (key === undefined || typeof args !== 'object' || args === null) return null
+  const value = (args as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : null
+}
+
+/**
+ * 给 `registerTool` 套一层审计：每完成一次 `tools/call` 写一行（§10.11）。
+ *
+ * 为什么包在这里而不是在 `app.ts` 解析响应：工具的**注册名**与 `isError` 只有这一层
+ * 拿得到。`app.ts` 看到的是 JSON-RPC（2025 代客户端拿到的还是请求级 SSE 流），
+ * 从响应体反推工具名与成败会随协议版本变化，而这里与协议无关。
+ *
+ * 三个必须保持的性质：
+ * - **被拦下的请求永远不会到这里**：分钟桶与日预算都在 `app.ts` 的中间件里，
+ *   走到工具执行就说明它已经通过了闸门；
+ * - **失败只降级**：写不进去只上报，结果原样返回；工具自己抛的异常照样上抛，只是
+ *   先记一行 `error`；
+ * - **只记自己的事实**：身份取自 `AuthInfo.extra`（我们自己构造的），不读客户端参数。
+ */
+function withAudit(
+  server: McpServer,
+  actor: { userId: string; tokenId: string; budgetKey: string },
+  requestId: string,
+  audit: McpAuditDeps,
+): void {
+  const register = server.registerTool.bind(server)
+  type AnyTool = (...args: unknown[]) => Promise<unknown>
+
+  const record = async (tool: string, args: unknown, outcome: 'ok' | 'error'): Promise<void> => {
+    try {
+      await audit.write({
+        userId: actor.userId,
+        tokenId: actor.tokenId,
+        budgetKey: actor.budgetKey,
+        tool,
+        queryText: queryTextOf(tool, args),
+        outcome,
+      })
+    } catch (error) {
+      // ★ 有意降级：一次成功的检索不该因为一棵审计行变成失败（§10.11）
+      audit.onError(error, { requestId, tokenId: actor.tokenId })
+    }
+  }
+
+  const patched = (name: string, config: unknown, callback: AnyTool): RegisteredTool => {
+    const wrapped: AnyTool = async (...callArgs) => {
+      // list_vocab 的签名是 `(ctx)`，其余是 `(args, ctx)`：参数恒为第一个
+      const args = callArgs[0]
+      try {
+        const result = await callback(...callArgs)
+        const isError = typeof result === 'object' && result !== null
+          && (result as { isError?: unknown }).isError === true
+        await record(name, args, isError ? 'error' : 'ok')
+        return result
+      } catch (error) {
+        await record(name, args, 'error')
+        throw error
+      }
+    }
+    return (register as unknown as (n: string, c: unknown, cb: AnyTool) => RegisteredTool)(name, config, wrapped)
+  }
+
+  // 只替换实例上的这一处：5 个工具注册函数保持原样，不各写一遍包装
+  ;(server as unknown as { registerTool: typeof patched }).registerTool = patched
 }
 
 export function buildMcpServer(ctx: McpRequestContext, deps: McpServerDeps): McpServer {
@@ -52,6 +142,11 @@ export function buildMcpServer(ctx: McpRequestContext, deps: McpServerDeps): Mcp
   // 工具日志里的 requestId 要和这次 HTTP 请求对得上：app.ts 在中间件里用 WeakMap
   // 把 `Request → requestId` 记下，工厂从 `ctx.requestInfo` 取回
   const requestId = mcpRequestIdOf(ctx.requestInfo)
+
+  // 审计身份来自 `AuthInfo.extra`（`mcp/auth.ts` 构造）。`null` 只可能出现在没有鉴权的
+  // 调用路径上；那种情况本来就不该有工具被执行，这里是防御分支
+  const actor = actorOf(ctx.authInfo)
+  if (actor !== null) withAudit(server, actor, requestId, deps.audit)
 
   // ⚠️ **注册顺序就是 `tools/list` 的顺序，不要按字母排。** SPEC §10.4 定死了
   //    `search_memes` → `pick_meme_for_reply` → `get_meme_image` → `random_meme` → `list_vocab`：

@@ -22,6 +22,13 @@ export type McpActor = {
   userId: string
   role: string
   tokenId: string
+  /**
+   * 日预算的计数键（§10.11）：PAT 是令牌行 id，OAuth 访问令牌是它的 `grant_id`。
+   *
+   * 凭证是 OAuth 时 `tokenId` 只代表「这一小时的那一行」，用它计预算会被刷新清零，
+   * 所以两者必须分开：`tokenId` 认令牌行（审计行上的 `token_id`），`budgetKey` 认预算。
+   */
+  budgetKey: string
   /** 用户级 MCP 设置（§5.9）：是否允许请求成人向。**不是**本次是否允许，见 §10.3.1 */
   allowAdult: boolean
   /** 用户级 MCP 排除过滤器（§10.3.2）。工具被动应用，调用方不能覆盖。 */
@@ -123,6 +130,9 @@ export async function authenticateMcpRequest(
       userId: row.userId,
       role: row.role,
       tokenId: row.id,
+      // §10.11：PAT 按令牌行、OAuth 按 grant 计日预算。在鉴权层算好，
+      // `/mcp` 的热路径上就不用再查一次 `access_tokens` 判断 kind
+      budgetKey: row.grantId ?? row.id,
       allowAdult: row.allowAdult,
       excluded: row.excluded,
     },
@@ -149,6 +159,8 @@ export function actorOf(authInfo: AuthInfo | undefined): McpActor | null {
     userId,
     role,
     tokenId,
+    // 旧进程/旧 AuthInfo 里可能没有这个键：退化成按令牌行计，比「不计数」安全（§10.11）
+    budgetKey: typeof extra['budgetKey'] === 'string' ? extra['budgetKey'] : tokenId,
     // 旧进程/旧 AuthInfo 里可能没有这个键：缺省 false 是安全的（§10.3.1）
     allowAdult: extra['allowAdult'] === true,
     // 缺省空过滤器 = 不过滤；永远归一化，避免把未校验的 JSON 直接用于查询

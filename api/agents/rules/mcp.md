@@ -83,6 +83,22 @@ createMcpHandler(buildServer, {
 - 超限返回 HTTP `429` + `Retry-After`（秒）。
 - 进程内滑动窗口，多副本各限各的——与 [rate-limit.md](../../../api/src/middleware/rate-limit.ts) 的既有口径一致，不引入共享存储。
 
+### 4.1 日预算（第二道闸）
+
+分钟桶之后还有一道**按令牌的日预算**（SPEC §10.11）：每键 2000 次/UTC 自然日，超了同样 `429`，
+`Retry-After` 是**到下一个 UTC 0 点的秒数**（`secondsUntilUtcMidnight`），不是分钟桶那种窗口剩余。
+
+- **计数源是数据库**（`countMcpCallsToday` 数 `mcp_call_logs`），不是内存：审计行本身就是计量表，
+  多副本天然一致，也不需要另建一张计数表。
+- **键是 `budgetKey` 不是 `tokenId`**：OAuth 访问令牌每小时刷新换一行，按行计会在每小时重置；
+  鉴权层按 `grant_id ?? token_id` 算好塞进 `AuthInfo.extra`（`mcp/auth.ts`），中间件只读。
+- **只拦真正的工具调用**：`peekJsonRpcCall` 拿到的 `toolName` 为 null（握手、`tools/list`、
+  未知工具名）不查库、不计数。未知工具由 SDK 回 JSON-RPC error，根本不执行。
+- **查库失败 = 未超限**（fail-open）。计数坏掉不该让整个 MCP 服务 503；`onDailyCountError`
+  记 `requestId` / `tokenId` 供排查。
+- **两道闸拦下的请求都不写审计**。顺序固定：分钟桶 → 日预算 → 执行 → 审计。审计写在工具回调里，
+  被拦的请求走不到那里；反过来在中间件里写一行「被拦」也是错的，§10.11 的审计只记执行过的调用。
+
 ## 5. 结果缓存
 
 `src/mcp/cache.ts`：进程内 Map + 60 秒 TTL + 最多 500 条（超过按插入顺序淘汰）。
@@ -151,4 +167,31 @@ OAuth 2.1 授权服务器（SPEC §10.10）签发的访问令牌就是 `access_t
 - `src/lib/mcp-filter.test.ts`（unit）：过滤器解析、词表校验、`ratings` 拒绝、脏 JSON 归一化、命中判断、缓存 key 稳定。
 - `src/mcp/query.test.ts`（unit）：词表关键词提取与兜底查询（不依赖数据库）。
 - `tests/mcp-oauth.test.ts`（integration）：OAuth 2.1 全流程——DCR 校验（fragment / 非 https / 超 10 个 / 错误 auth method）、两种 well-known 形态、401 带 `resource_metadata` 与 `scope`、授权码完整流程、错 verifier 不烧码、码重放撤 grant、刷新旋转与复用检测、20 条 grant 上限、撤销幂等、PAT 不回归。
-- 集成测试连真 Postgres，**新增表要加进 `tests/helpers/test-db.ts` 的 truncate 清单**（`access_tokens` / `user_mcp_settings`，以及 OAuth 的 `oauth_clients` / `oauth_grants` / `oauth_authorization_requests` / `oauth_authorization_codes` / `oauth_refresh_tokens`）。
+- 集成测试连真 Postgres，**新增表要加进 `tests/helpers/test-db.ts` 的 truncate 清单**（`access_tokens` / `user_mcp_settings`，以及 OAuth 的 `oauth_clients` / `oauth_grants` / `oauth_authorization_requests` / `oauth_authorization_codes` / `oauth_refresh_tokens` / `mcp_call_logs`）。
+- `tests/mcp-audit.test.ts`（integration）：审计写行、`queryText` 只对本人可见、`scope=all` 的权限与跨用户 `tokenId`、日预算 429 与次日恢复、OAuth 刷新不重置预算、写日志失败不拦请求、清理只删 90 天前的行。**连库用例一律经 `tests/helpers/mcp-audit.ts` 的 `createTestAudit(db)`**，不要各自拼一份写实现。
+
+## 10. 调用审计（实现约束）
+
+契约在 SPEC §10.11 / §5.11 / §6.11，这里只记「代码上必须怎么放」：
+
+**写在哪。** `mcp/server.ts` 的 `withAudit` 包装 `server.registerTool`，每个工具回调执行完写一行。
+不要改到 `app.ts` 去解析响应——工具名与 `isError` 只有注册那一层拿得到，从 JSON-RPC 响应
+反推会随协议版本（2025 代的请求级 SSE / 2026-07 的单 JSON）漂移。
+
+**失败只降级。** 写失败捕获后调 `audit.onError`，然后**原样返回工具结果**；工具自己抛的异常
+记为 `'error'` 再上抛。任何情况下不能让检索因为一行审计失败而失败。
+
+**身份只信 `AuthInfo.extra`。** `userId` / `tokenId` / `budgetKey` 全部来自 `actorOf(ctx.authInfo)`，
+从不读工具参数。`tokenId` 记令牌行（OAuth 是这一小时的访问令牌行），`budgetKey` 记预算键
+（OAuth 是 `grant_id`）——两者不同，别合并成一个字段。
+
+**`queryText` 只对两个工具写。** `search_memes` 取 `args.query`，`pick_meme_for_reply` 取
+`args.message`，其余一律 null。**不序列化整个参数对象**：里面可能有过滤器、成人向开关，
+写进审计等于把用户的筛选习惯也存成日志。
+
+**读路径的脱敏在 SQL 里，不在序列化里。** `data/mcp-call-logs.ts` 的 `privacyQueryText` 用
+`case when user_id = caller end` 投影原文列。不要改成「先查出来、路由里按 userId 抹 null」——
+那样多一条读路径就多一个会漏的地方。
+
+**清理折进 `queue/cleanup.ts` 的 `sweep()`**，按「先数、记日志、再删」的既有形状，
+**不要新起 `setInterval`**。保留 90 天，物理删除。

@@ -32,6 +32,8 @@ const { createMcpApp } = await import('../src/mcp/app.js')
 const { authenticateMcpRequest } = await import('../src/mcp/auth.js')
 const { buildMcpServer } = await import('../src/mcp/server.js')
 const { createTtlCache } = await import('../src/mcp/cache.js')
+const { countMcpCallsToday } = await import('../src/data/mcp-call-logs.js')
+const { createTestAudit } = await import('./helpers/mcp-audit.js')
 const { generateToken, hashToken, prefixOf } = await import('../src/lib/token.js')
 
 type SearchToolResult = import('../src/mcp/search.js').SearchToolResult
@@ -61,9 +63,14 @@ afterAll(async () => {
 function makeMcpApp(): ReturnType<typeof createMcpApp> {
   return createMcpApp({
     authenticate: authenticateMcpRequest,
-    buildServer: (ctx) => buildMcpServer(ctx, { db, cache: createTtlCache<SearchToolResult>() }),
+    buildServer: (ctx) => buildMcpServer(ctx, {
+      db,
+      cache: createTtlCache<SearchToolResult>(),
+      audit: createTestAudit(db),
+    }),
     onHandlerError: () => {},
     publicOrigin: null,
+    countDailyCalls: (budgetKey) => countMcpCallsToday(budgetKey, db),
   })
 }
 

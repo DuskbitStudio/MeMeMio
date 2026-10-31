@@ -38,6 +38,14 @@ export type ActiveAccessToken = {
   name: string
   prefix: string
   expiresAt: Date | null
+  /**
+   * OAuth 访问令牌所属的授权（§5.10）；PAT 为 null。
+   *
+   * 只给日预算的计数键用（§10.11）：OAuth 令牌每小时刷新换一行，按行计预算会每小时
+   * 清零，按 grant 计才等于「按令牌」。校验层由此算出 `budget_key`，
+   * 不必在 `/mcp` 的热路径上再查一次库。
+   */
+  grantId: string | null
   /** 用户级 MCP 设置（§5.9）；没有设置行时为 false。MCP 的成人向双闸门用（§10.3.1）。 */
   allowAdult: boolean
   /** 用户级 MCP 排除过滤器（§10.3.2）；没有设置行时为空过滤器。 */
@@ -157,6 +165,7 @@ export async function findActiveByHash(
       name: accessTokens.name,
       prefix: accessTokens.prefix,
       expiresAt: accessTokens.expiresAt,
+      grantId: accessTokens.grantId,
       // 没有设置行时 coalesce 成 false（§5.9：空表是正常状态）
       allowAdult: sql<boolean>`coalesce(${userMcpSettings.allowAdult}, false)`,
       excluded: sql<unknown>`coalesce(${userMcpSettings.excluded}, '{}'::jsonb)`,
@@ -170,6 +179,28 @@ export async function findActiveByHash(
   const row = rows[0]
   if (row === undefined) return null
   return { ...row, excluded: normalizeMcpFilter(row.excluded) }
+}
+
+/**
+ * 这个令牌行属于谁。**不看有效 / 撤销 / 过期**——调用方问的是「这行是不是你的」，
+ * 不是在问「它现在能不能用」。
+ *
+ * 目前唯一的调用方是 `GET /api/v1/mcp/logs` 的 `scope=mine&tokenId=`（SPEC §6.11：
+ * 筛别人的令牌 → `NOT_FOUND`）。日志表不存用户资料，所以这条判定只能回到令牌表。
+ *
+ * 查不到返回 null：不存在与「存在但不是你的」在路由层报同一个 `NOT_FOUND`，
+ * 区分了就成了一条探测别人令牌 id 的通道（与 `revokeAccessToken` 同一条理由）。
+ */
+export async function findTokenOwner(
+  tokenId: string,
+  db: Db = defaultDb,
+): Promise<string | null> {
+  const rows = await db
+    .select({ userId: accessTokens.userId })
+    .from(accessTokens)
+    .where(eq(accessTokens.id, tokenId))
+    .limit(1)
+  return rows[0]?.userId ?? null
 }
 
 /**

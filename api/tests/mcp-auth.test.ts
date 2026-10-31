@@ -34,6 +34,8 @@ const { createMcpApp } = await import('../src/mcp/app.js')
 const { authenticateMcpRequest, resetTokenTouchThrottle } = await import('../src/mcp/auth.js')
 const { buildMcpServer } = await import('../src/mcp/server.js')
 const { createTtlCache } = await import('../src/mcp/cache.js')
+const { countMcpCallsToday } = await import('../src/data/mcp-call-logs.js')
+const { createTestAudit } = await import('./helpers/mcp-audit.js')
 const { TOOL_ORDER } = await import('../src/mcp/tool-names.js')
 const { log } = await import('../src/logger.js')
 const { eq } = await import('drizzle-orm')
@@ -81,12 +83,14 @@ async function tokenRow(id: string) {
 
 function makeMcpApp(limits?: { allPerMinute?: number; searchPerMinute?: number }) {
   const handlerErrors: Error[] = []
+  const audit = createTestAudit(db)
   const app = createMcpApp({
     authenticate: authenticateMcpRequest,
-    buildServer: (ctx) => buildMcpServer(ctx, { db, cache: createTtlCache() }),
+    buildServer: (ctx) => buildMcpServer(ctx, { db, cache: createTtlCache(), audit }),
     onHandlerError: (error) => handlerErrors.push(error),
     // 不配 = 按请求推导；用例里的 Host 是 localhost
     publicOrigin: null,
+    countDailyCalls: (budgetKey) => countMcpCallsToday(budgetKey, db),
     ...(limits !== undefined ? { limits } : {}),
   })
   return { app, handlerErrors }

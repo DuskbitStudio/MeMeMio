@@ -8,7 +8,7 @@ import {
 } from '@modelcontextprotocol/server'
 import { requestId, type RequestIdVariables } from '../middleware/request-id.js'
 import { createOriginResolver } from '../oauth/origin.js'
-import { SEARCH_TOOL_NAMES } from './tool-names.js'
+import { SEARCH_TOOL_NAMES, TOOL_NAMES } from './tool-names.js'
 
 /**
  * `/mcp` 子应用（SPEC §10.2、§10.3、§10.6；实现约束 `agents/rules/mcp.md §1-§4`）。
@@ -44,6 +44,15 @@ const MCP_SEARCH_REQUESTS_PER_MINUTE = 30
 
 const RATE_WINDOW_MS = 60_000
 
+/** 工具全集，供 peek 判名（`TOOL_NAMES` 是常量表，不是 Set）。 */
+const TOOL_SET: ReadonlySet<string> = new Set(Object.values(TOOL_NAMES))
+
+/**
+ * 每个令牌每天的工具调用上限（SPEC §10.11）。**阈值是实现约束、可调**；
+ * 「按令牌计数、UTC 自然日、超限 429 + Retry-After」才是契约。
+ */
+const MCP_DAILY_CALLS_PER_KEY = 2000
+
 /**
  * 桶数上限。键是 `tokenId`，正常部署下到不了这个量级；到顶说明有人在大量签发/撤销令牌，
  * 那也不能让它把内存顶爆。与 `middleware/rate-limit.ts` 的 `MAX_BUCKETS` 同一个口径。
@@ -54,6 +63,8 @@ export type McpRateLimits = {
   allPerMinute: number
   searchPerMinute: number
   windowMs: number
+  /** 每令牌每日工具调用上限（§10.11）。仅供测试调小；生产用默认值。 */
+  dailyCallsPerKey: number
 }
 
 /** 一次请求里能拿到的日志上下文。 */
@@ -76,6 +87,15 @@ export type McpAppDeps = {
   onHandlerError(error: Error, requestId?: string): void
   /** 仅供测试：把阈值调小来验 429，生产不要传。 */
   limits?: Partial<McpRateLimits>
+  /**
+   * 这个预算键今天（UTC）已经用掉的工具调用次数（§10.11）。
+   *
+   * 生产注入 `data/mcp-call-logs.countMcpCallsToday`；本文件不 import `data/*`（文件头）。
+   * **抛异常 = 未超限**：查库失败不该让整个服务不可用（§10.11 的降级优先级）。
+   */
+  countDailyCalls(budgetKey: string): Promise<number>
+  /** 日预算查询降级时的上报（可选；`app.ts` 自己不 import logger）。 */
+  onDailyCountError?(error: unknown, meta: { requestId: string; tokenId: string }): void
   /**
    * 公开 origin（SPEC §10.10.1），只用来拼 401 里的 `resource_metadata`。
    *
@@ -222,39 +242,71 @@ function tooManyRequests(requestId: string, retryAfterSeconds: number): Response
 
 type JsonRpcPeek = {
   isSearchToolCall: boolean
+  /**
+   * `tools/call` 且工具名在全集里时是它的名字，否则 null。
+   *
+   * 日预算只数**真正会执行的**工具调用（§10.11）：未知工具名由 SDK 回 JSON-RPC error，
+   * 不执行、不写审计，也就不该占预算。名字取自我们自己解析的 body，写库前仍要再按
+   * `TOOL_NAMES` 校验一次。
+   */
+  toolName: string | null
 }
 
 /**
- * 只 peek 出「这是不是一个检索类 tools/call」（限流要按工具名分桶）。
+ * 只 peek 出「这是不是一个检索类 tools/call」（限流要按工具名分桶）与工具名（日预算要它）。
  *
  * 用 `clone()` 读，**不消费原流**——真正的 body 留给 SDK 自己读（`agents/rules/mcp.md §2`：
  * 不传 `parsedBody`）。解析失败**不拦**：交给 SDK 回 JSON-RPC parse error，
  * 且这一次仍然计入全量桶、不计检索桶。
  */
 async function peekJsonRpcCall(request: Request): Promise<JsonRpcPeek> {
-  if (request.method !== 'POST') return { isSearchToolCall: false }
+  if (request.method !== 'POST') return { isSearchToolCall: false, toolName: null }
 
   try {
     const raw: unknown = JSON.parse(await request.clone().text())
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-      return { isSearchToolCall: false }
+      return { isSearchToolCall: false, toolName: null }
     }
 
     const message = raw as { method?: unknown; params?: unknown }
-    if (message.method !== 'tools/call') return { isSearchToolCall: false }
+    if (message.method !== 'tools/call') return { isSearchToolCall: false, toolName: null }
     if (typeof message.params !== 'object' || message.params === null) {
-      return { isSearchToolCall: false }
+      return { isSearchToolCall: false, toolName: null }
     }
 
     const name = (message.params as { name?: unknown }).name
-    return {
-      isSearchToolCall: typeof name === 'string' && SEARCH_TOOL_NAMES.has(name),
+    if (typeof name !== 'string' || !TOOL_SET.has(name)) {
+      return { isSearchToolCall: false, toolName: null }
     }
+    return { isSearchToolCall: SEARCH_TOOL_NAMES.has(name), toolName: name }
   } catch {
     // ★ 这是**有意的降级**，不是吞错误：body 不是合法 JSON 时 JSON-RPC 层会给客户端
-    //   一个 parse error，那是它该干的事；这里只需要「不计检索桶」这个保守结论。
-    return { isSearchToolCall: false }
+    //   一个 parse error，那是它该干的事；这里只需要「不计检索桶、不计预算」这个保守结论。
+    return { isSearchToolCall: false, toolName: null }
   }
+}
+
+/**
+ * 到下一个 UTC 0 点还有几秒（§10.11 的 `Retry-After`）。
+ *
+ * 至少 1 秒：返回 0 会让客户端立刻重试、再被打回，形成一小段忙等。
+ */
+export function secondsUntilUtcMidnight(now: number = Date.now()): number {
+  const date = new Date(now)
+  const next = Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate() + 1,
+    0, 0, 0, 0,
+  )
+  return Math.max(1, Math.ceil((next - now) / 1000))
+}
+
+/** 日预算键（§10.11）：鉴权层算好的 `budgetKey`；旧 AuthInfo 没有时退回 tokenId。 */
+function budgetKeyOf(authInfo: AuthInfo): string {
+  const budgetKey = authInfo.extra?.['budgetKey']
+  if (typeof budgetKey === 'string') return budgetKey
+  return rateLimitKeyOf(authInfo)
 }
 
 /** 限流键：生产里 `extra.tokenId` 一定在（`authenticateMcpRequest` 构造的）；兜底用 clientId。 */
@@ -274,7 +326,10 @@ export function createMcpApp(deps: McpAppDeps): Hono<{ Variables: McpVariables }
     allPerMinute: deps.limits?.allPerMinute ?? MCP_ALL_REQUESTS_PER_MINUTE,
     searchPerMinute: deps.limits?.searchPerMinute ?? MCP_SEARCH_REQUESTS_PER_MINUTE,
     windowMs: deps.limits?.windowMs ?? RATE_WINDOW_MS,
+    dailyCallsPerKey: deps.limits?.dailyCallsPerKey ?? MCP_DAILY_CALLS_PER_KEY,
   }
+  // 日预算不进 `createRateLimiter`：它是查库计数，不是进程内的滑动窗口
+  const dailyLimit = limits.dailyCallsPerKey
   const limiter = createRateLimiter(limits)
   // 与 `oauth/app.ts` 同一个解析器：401 里的 `resource_metadata` 与 issuer 必须指同一个 origin
   const resolveOrigin = createOriginResolver(deps.publicOrigin)
@@ -328,13 +383,35 @@ export function createMcpApp(deps: McpAppDeps): Hono<{ Variables: McpVariables }
       await next()
     })
 
-    // 令牌级限流：两个桶，见 createRateLimiter
+    // 令牌级限流：两道闸，先分钟桶、再日预算（§10.6 + §10.11）。
+    // **顺序不能反**：分钟桶打回的请求连查询都不该发；两道闸任一拦下都不写审计
+    // （`mcp/server.ts` 只包装工具执行，拦截分支根本走不到那里）
     .use('*', async (c, next) => {
-      const decision = limiter.take(
-        rateLimitKeyOf(c.get('mcpAuth')),
-        (await peekJsonRpcCall(c.req.raw)).isSearchToolCall,
-      )
+      const peek = await peekJsonRpcCall(c.req.raw)
+      const authInfo = c.get('mcpAuth')
+
+      const decision = limiter.take(rateLimitKeyOf(authInfo), peek.isSearchToolCall)
       if (!decision.allowed) return tooManyRequests(c.get('requestId'), decision.retryAfterSeconds)
+
+      // 只数真正的工具调用：握手、tools/list、未知工具都不占预算（§10.11）
+      if (peek.toolName !== null) {
+        let used: number
+        try {
+          used = await deps.countDailyCalls(budgetKeyOf(authInfo))
+        } catch (error) {
+          // ★ **降级优先**（§10.11）：查库失败按未超限放行。一行审计写不进去或
+          //   一次计数失败，都不该让整个 MCP 服务不可用。上报由组装处决定记到哪
+          deps.onDailyCountError?.(error, {
+            requestId: c.get('requestId'),
+            tokenId: rateLimitKeyOf(authInfo),
+          })
+          used = 0
+        }
+        if (used >= dailyLimit) {
+          return tooManyRequests(c.get('requestId'), secondsUntilUtcMidnight())
+        }
+      }
+
       await next()
     })
 
