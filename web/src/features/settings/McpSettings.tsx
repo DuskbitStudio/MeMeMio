@@ -1,8 +1,10 @@
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   BookOpenIcon,
   CopyIcon,
   FilterIcon,
+  HistoryIcon,
   KeyRoundIcon,
   PlusIcon,
   TriangleAlertIcon,
@@ -426,6 +428,24 @@ export function McpSettings() {
       {/* 已连接应用（OAuth 授权，SPEC §6.10 / §10.8）。与访问令牌并列：
           一个是自己的客户端用令牌，一个是第三方客户端走授权，边界不同所以分开列 */}
       <McpGrants />
+
+      <Separator />
+
+      {/* 调用记录（SPEC §10.11 的可见面）。**独立页面**（产品负责人 2026-10-31 裁定 ⑥），
+          这里只放入口：审计页有自己的筛选、分页与地址可分享性，塞进这段长卡片里
+          会被「一次只显示一段」的折叠吃掉。 */}
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0">
+          <h3 className="text-base font-medium">{MCP_COPY.auditTitle}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{MCP_COPY.auditEntryDescription}</p>
+        </div>
+        <Button asChild variant="outline" className={TOUCH}>
+          <Link to="/audit">
+            <HistoryIcon aria-hidden="true" data-icon="inline-start" />
+            {MCP_COPY.auditEntryAction}
+          </Link>
+        </Button>
+      </div>
 
       <Separator />
 

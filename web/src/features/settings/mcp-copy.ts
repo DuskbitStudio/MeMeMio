@@ -188,6 +188,11 @@ export const MCP_COPY = {
   filterDiscardAction: '放弃更改',
   filterLoadError: '过滤器加载失败',
   filterSaveError: '过滤器保存失败',
+  /** 调用记录入口（SPEC §10.11 的可见面：独立页面 `/audit`）。 */
+  auditTitle: '调用记录',
+  auditEntryDescription:
+    '每次工具调用的时间、令牌、工具、检索原文和结果。只记工具调用；他人的检索原文不可见。',
+  auditEntryAction: '查看调用记录',
 } as const
 
 /** 行内代码片段的样式（表格 / 步骤里的 `Authorization: Bearer …` 那一类）。 */

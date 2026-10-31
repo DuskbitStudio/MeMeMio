@@ -36,6 +36,11 @@ const ImportPage = lazy(() => import('./routes/import').then((m) => ({ default: 
 const SettingsPage = lazy(() =>
   import('./routes/settings').then((m) => ({ default: m.SettingsPage })),
 )
+/*
+  审计页（`/audit`）也切出去：它是从设置页链过去的低频页，调用记录可以上千行，
+  没必要进首屏包。理由同上。
+*/
+const AuditPage = lazy(() => import('./routes/audit').then((m) => ({ default: m.AuditPage })))
 
 /**
  * 组件参照页（`/ui`）**不进生产包**。
@@ -323,6 +328,10 @@ export function App() {
               <Route path="/browse" element={<BrowsePage />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              {/* 审计页是设置页 MCP 段的独立一页（SPEC §10.11 的产品负责人裁定 ⑥）：
+                  放登录后面、但不放进设置页的分段——它有自己的筛选与分页，塞进
+                  「一次只显示一段」的容器里会失去地址可分享那一点。 */}
+              <Route path="/audit" element={<AuditPage />} />
             </Route>
 
             {/* 开发期才有这条路由（见文件上方 `UiPage` 的推导）。生产包里 `UiPage` 是
