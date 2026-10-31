@@ -69,6 +69,8 @@ function makeApp(options: {
     // 不配 = 按请求推导；用例里的 Host 是 localhost
     publicOrigin: null,
     limits: options.limits,
+    // 日预算在 `tests/mcp-audit.test.ts` 里验真；这里恒 0，不碰数据库
+    countDailyCalls: async () => 0,
   })
   return { app, handlerErrors }
 }
