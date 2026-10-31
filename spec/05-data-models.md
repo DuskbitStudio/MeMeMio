@@ -494,14 +494,15 @@ oauth_refresh_tokens(
 
 ```sql
 mcp_call_logs(
-  id            bigserial primary key,
-  user_id       uuid not null references users(id) on delete cascade,
-  token_id      uuid references access_tokens(id) on delete set null, -- 用哪个令牌调的；令牌行物理删除后为 null
-  budget_key    text not null,      -- 计日预算的键：PAT = token_id；OAuth = grant_id
-  tool          text not null,      -- tools/call 的工具名
-  query_text    text,               -- 检索原文；只有 search_memes / pick_meme_for_reply 有
-  outcome       text not null,      -- 'ok' | 'error'
-  created_at    timestamptz not null default now()
+  id              bigserial primary key,
+  user_id         uuid not null references users(id) on delete cascade,
+  token_id        uuid references access_tokens(id) on delete set null, -- 用哪个令牌调的；令牌行物理删除后为 null
+  budget_key      text not null,    -- 计日预算的键：PAT = token_id；OAuth = grant_id
+  tool            text not null,    -- tools/call 的工具名
+  query_text      text,             -- 检索原文；只有 search_memes / pick_meme_for_reply 有
+  result_meme_ids uuid[] not null default '{}', -- 这次返回了哪些图，按工具输出顺序；没有图、失败的调用是空数组
+  outcome         text not null,    -- 'ok' | 'error'
+  created_at      timestamptz not null default now()
 );
 
 create index mcp_call_logs_user_time_idx on mcp_call_logs (user_id, created_at desc);
@@ -511,5 +512,8 @@ create index mcp_call_logs_budget_time_idx on mcp_call_logs (budget_key, created
 - **不存任何令牌值**——只存 `token_id`，日志纪律与 [§10.3](10-mcp.md#103-鉴权与访问令牌) 相同。
 - **`budget_key` 是文本，不设外键**：PAT 用 `token_id`，OAuth 令牌用 `grant_id`。OAuth 访问令牌每小时刷新换一行，按行计预算会每小时清零；grant 在刷新之间不变，见 [§10.11](10-mcp.md#1011-调用审计与令牌日预算)。令牌行被物理删除后，`budget_key` 仍留在字符串里，历史计数不受影响（那些行也已经在清理窗口内）。
 - **`query_text` 是唯一的用户输入原文列**，读出规则见 [§6.11](06-endpoints.md#611-mcp-调用日志)：**本人可见，他人（含 `admin`）返回 `null`**。不是列级加密，靠查询层约束；这条规则要有专门测试。
+- **`result_meme_ids` 跟着 `query_text` 同一条隐私规则**：本人可见，他人返回 `null`。返回的 id 比原文更直接——拿到 id 就等于拿到图与它身上全部标签。条数不在此列：它是一次调用的数量，不透露检索内容，见 [§6.11](06-endpoints.md#611-mcp-调用日志)。
+- **`result_meme_ids` 不设外键、不存快照**：图被软删后 id 仍留在数组里，读取面按 id 重查主表，查不到就显示「已删除或不可见」。存 URL 会指到一个可能已被换掉的对象，存 `description` 等于把 90 天的日志变成第二份内容副本——**日志只记 id，内容永远从主表读**。
+- **条数不另存一列**：读出时按数组长度算（`coalesce(cardinality(result_meme_ids), 0)`）。存两列就有对不上的可能，而它们之间没有第二种真相。
 - **保留 90 天**，由 `api/src/queue/cleanup.ts` 的周期扫描删除（[queue.md §6](../api/agents/rules/queue.md)），不新起 `setInterval`。
 - 新表进 `api/tests/helpers/test-db.ts` 的 truncate 清单。

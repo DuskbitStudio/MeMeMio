@@ -937,6 +937,8 @@ GET /api/v1/mcp/logs?scope=mine&tool=search_memes&tokenId=…&from=2026-10-01&to
       tokenName: "我的 Claude",
       tokenPrefix: "mcp_a1b2c3d4e",
       queryText: "想找一个笑的表情",   // 他人的行恒为 null
+      resultCount: 6,                 // 恒有，他人行也给
+      resultMemeIds: ["9a1f…", "9a2f…"], // 他人的行恒为 null
       outcome: "ok"
     }
   ],
@@ -955,6 +957,12 @@ GET /api/v1/mcp/logs?scope=mine&tool=search_memes&tokenId=…&from=2026-10-01&to
 **按 `createdAt` 倒序。** 游标要与筛选条件一起签名——换了筛选还拿旧游标 → `VALIDATION_FAILED`（[§2.2](02-errors.md#22-通用错误码)）。
 
 **`queryText` 的隐私规则。** 只有 `scope=mine` 下的行、以及 `scope=all` 中 `userId` 等于调用者本人的行，才返回原文；**其余行一律 `null`**，管理员也不例外。客户端对 `null` 显示「仅本人可见」，不得从别的字段反推。
+
+**`resultMemeIds` 是第二个、也是最后一个受这条规则约束的字段。** 同上：只有调用者本人的行返回 id 数组，他人的行一律 `null`。返回的 id 等于「这个人当时拿到了哪些图」，泄露的是检索意图本身，比原文更直接。**`resultCount` 不在此列**——它是数量，不透露内容，两种 `scope` 都返回：管理权限解释为「知道谁在多频繁地取库、取走多少」，不含「读了什么」（[§10.11](10-mcp.md#1011-调用审计与令牌日预算)）。
+
+**`resultCount` 与 `resultMemeIds` 的关系。** `resultCount` 恒等于 `resultMemeIds` 的长度，**但两者不能互相替代**：他人行有数无 id；本人的行两者都有。`resultCount` 为 `0` 且 `outcome` 为 `ok` 时，可能是 `list_vocab`（本来就不返回图），也可能是这一次确实一张都没匹配上——客户端按 `tool` 区分，不把 `0` 一律读成「没结果」，也不能拿它去猜返回了哪些图。失败的调用 `resultCount` 为 `0`、`resultMemeIds` 为空数组（本人的行）。
+
+**id 只记 id，内容从主表取。** 日志不存图快照（[§5.11](05-data-models.md#511-mcp-调用日志)）；客户端要展示缩略图或标签，按 id 调 [`GET /memes/{id}`](#63-搜索与浏览) 现取，查不到（已软删）显示「已删除或不可见」。日志不对已删的图保留历史内容，也不因为图已删就从数组里抹掉 id——「当时返回过它」是事实。
 
 **`tokenName` / `tokenPrefix` 是展示用身份**，不是密钥：`prefix` 本来就出现在本人的令牌列表里（[§6.8](#68-访问令牌)）。令牌行已物理删除时 `tokenId` 为 `null`，`tokenName` 回 `null`，客户端显示「已删除的令牌」。
 
