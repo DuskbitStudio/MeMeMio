@@ -3,6 +3,8 @@
 [返回索引](INDEX.md)
 
 > **状态：`accepted`**（2026-10-22）。新增能力，`api` 的**第二个外部接口**。产品负责人已拍板四件事：**只读 / PAT / 本期做 web 设置页 / 默认挂载**。2026-10-22 两端实现落齐并通过自动化闸门（api `typecheck` + 741/741 测试，含 3 个 MCP integration；web `typecheck` + `build`）。**真实 LLM 客户端与至少一条 IM 渠道验收后转 `stable`。**
+>
+> **2026-10-31 修订（[§9.38](09-decisions.md)）：新增 OAuth 2.1 授权服务器（[§10.10](#1010-oauth-21-授权服务器)），回应 [issue #4](https://github.com/DuskbitStudio/MeMeMio/issues/4)。** PAT 路径行为不变，唯一可见变化是 401 挑战多一个 `resource_metadata` 参数。两端实现见 [`joint-tasks/2026-10-31-mcp-oauth.md`](../joint-tasks/2026-10-31-mcp-oauth.md)。
 
 ## §10.1 范围与地位
 
@@ -38,7 +40,15 @@
 MCP 端点使用**第二种凭证**：个人访问令牌（Personal Access Token，PAT）。它与 [§3.1](03-auth-permission.md#31-会话) 的 cookie 会话互不通用：
 
 - 只认 HTTP 头 `Authorization: Bearer <token>`；**不认 cookie**。
-- token 无效、过期、已撤销、格式不对，一律 `401`，并带 `WWW-Authenticate: Bearer realm="mememio"`。**不带 `resource_metadata`**——本服务不实现 OAuth 2.1 流程，带上它会让客户端去走一条走不通的发现流程。
+- token 无效、过期、已撤销、格式不对，一律 `401`，并带：
+
+  ```http
+  WWW-Authenticate: Bearer realm="mememio",
+    resource_metadata="<公开 origin>/.well-known/oauth-protected-resource/mcp",
+    scope="mememio:read"
+  ```
+
+  **`resource_metadata` 对所有 401 统一携带**，包括无令牌与 PAT 无效两种情形——只有一个 401 出口，不按令牌前缀分流。已经配好 PAT 的客户端不解析这个头，行为与改动前逐字一致；会走发现流程的客户端（[§10.10](#1010-oauth-21-授权服务器)）靠它找到授权服务器。`<公开 origin>` 见 [§10.10.1](#10101-公开-origin)；未配置时由请求推导。
 - 令牌代表**它所绑定的那个用户**的只读身份：与登录用户一样能读全库（[§3.3](03-auth-permission.md#33-权限矩阵)），不做归属过滤。
 
 令牌形态与生命周期：
@@ -234,8 +244,9 @@ MCP 支持**用户级标签排除过滤器**：用户在设置页「MCP 接入 �
 ## §10.7 兼容与状态
 
 - **纯新增。** 不改变 REST、`AppType`、`web` 的任何既有行为。
+- **2026-10-31 起同时接受 OAuth 2.1 签发的访问令牌**（[§10.10](#1010-oauth-21-授权服务器)）。它与 PAT 走同一条校验路径（同一张表、同一形状、同一用户级 MCP 设置）；差别只在签发方式与寿命。**PAT 不降级、不废弃**，脚本与自建 bot 继续用它。
 - **2025 代客户端**发 `initialize` 也能用：服务端按请求级无状态回退（不建立会话、不提供 GET 长流）。需要长连接/服务端主动消息的客户端不在支持范围。
-- **版本状态**：本节 `accepted`（2026-10-22，两端实现落齐、自动化闸门通过；真实客户端与渠道尚未验）。真实 LLM 客户端 + 至少一条 IM 渠道验收 → `stable`。
+- **版本状态**：本节 `accepted`（2026-10-22，两端实现落齐、自动化闸门通过；真实客户端与渠道尚未验）。真实 LLM 客户端 + 至少一条 IM 渠道验收 → `stable`。OAuth 部分的联合验收需要公网 HTTPS 与真实托管客户端，与上面同一条外部验收一起挂账。
 - **停用方式**：撤销全部令牌，或回滚版本。不提供运行参数开关。
 
 ## §10.8 文案（契约）
@@ -313,17 +324,250 @@ MCP 只负责把图交给你的机器人。真正发到微信 / QQ / LINE，由�
 
 撤销确认
 「<名称>」将立即失去访问权限。正在使用它的客户端会收到 401。这个操作不可撤销。
+
+授权同意 · 标题
+允许「<应用名>」访问你的表情包库？
+
+授权同意 · 说明
+<应用名> 将能以只读方式检索这个共享库，和你登录后看到的内容一样。
+它不能上传、修改或删除任何图片。
+
+授权同意 · 回跳
+授权完成后会回到：<主机名>
+
+授权同意 · 未验证
+这个应用是自助注册接入的，我们无法核实它的身份。只在你信任的客户端里授权。
+
+授权同意 · 内容范围
+内容范围与过滤器沿用你的 MCP 设置（成人向默认关闭）。
+
+授权同意 · 操作
+取消 / 允许
+
+授权同意 · 失效
+这个授权链接已失效或已被使用。回到客户端重新发起连接。
+
+已连接应用 · 标题
+已连接应用
+
+已连接应用 · 说明
+通过 OAuth 授权接入的客户端。撤销后它们会立即收到 401，需要重新授权。
+
+已连接应用 · 空态
+还没有应用通过 OAuth 接入。
+
+已连接应用 · 列项
+<应用名> · 回跳到 <主机名> · 最近使用 <时间>
+
+已连接应用 · 列项（从未使用）
+<应用名> · 回跳到 <主机名> · 从未使用
+
+已连接应用 · 撤销确认
+撤销后「<应用名>」立即失去访问权限，需要重新授权才能接入。确定撤销？
+
+已连接应用 · 数量上限
+已达上限（20 个）。先撤销不用的应用，再授权新的。
 ```
+
+**「最近使用」为 `null` 时整段换掉，不补占位。** `lastUsedAt` 为 `null` 表示这个授权签下来之后一次都没用过（刚批准、或客户端一直没发起请求），此时用「列项（从未使用）」那一行，**不要**渲染成「最近使用 —」或空时间——两种都读起来像坏了。`expiresAt` 也是可空字段，但列项模板里没有它，界面不展示，也就不需要呈现规则。这两条是**渲染规则**，不是给模型看的文案，实现放在 `oauth-copy.ts` 里；`<主机名>` 取 §6.10 的 `redirectHost`。
 
 ## §10.9 明确不做
 
 | 不做 | 原因 |
 |---|---|
 | 写工具（上传 / 编辑 / 删除 / 收藏 / 重打标 / 管理） | 共享库的风险在写路径（[§3.4](03-auth-permission.md#34-实施要求)）；让 LLM 触发写操作，权限与成本语义都不可控 |
-| OAuth 2.1 / DCR / CIMD | 规范里 authorization 是 OPTIONAL；自托管邀请制下 OAuth 的实现量是 PAT 的 5–10 倍。`claude.ai` connectors 走 OAuth，需要时用 stdio 桥接，见 [`docs/mcp.md`](../docs/mcp.md) |
+| CIMD（client_id 元数据文档） | 要求服务端主动抓取客户端给出的 URL，是 SSRF 面；DCR 已覆盖主流托管客户端。只支持 CIMD 的客户端暂连不上，见 [§10.10.2](#10102-客户端注册dcr) |
+| 机密客户端 / 客户端密钥 | v1 只有公户端（`token_endpoint_auth_method: none`），靠 PKCE S256；手工登记与 `client_secret` 另立地址 |
 | 浏览器内 MCP 客户端 / CORS | 带 `Origin` 一律 403；Web 端有自己的 UI |
 | `resources` / `prompts` / 变更通知 / 会话 | 本用例只需要工具；多一套原语就多一套契约与测试面 |
 | 图片代理 / 格式转码 | 与「图片字节不经过 api」相撞；渠道适配归机器人 |
 | `useCount` / `lastUsedAt` / 发送统计 | 产品口径明确不做（[产品说明 §4](../docs/product.md)） |
 | 仓库内实现微信 / QQ / LINE bot | 外部资质与合规问题；个人号没有官方 API。MCP 是接入面，bot 是调用方 |
 | 非官方个人号协议 | 违反 ToS、有封号风险，不作为产品能力 |
+
+## §10.10 OAuth 2.1 授权服务器
+
+> **状态：`proposed`**（2026-10-31，回应 [issue #4](https://github.com/DuskbitStudio/MeMeMio/issues/4)）。MCP 服务端作为 **OAuth 2.1 资源服务器**，并在**同一 origin** 上提供授权服务器。对托管型 MCP 客户端（ChatGPT connector、Claude connector 等没有地方填自定义请求头的宿主）提供「点授权」的接入方式；**PAT 原样保留**，不降级、不废弃。
+
+依据：MCP 授权规范 2025-11-25（authorization）、RFC 9728（受保护资源元数据）、RFC 8414（授权服务器元数据）、RFC 7591（动态客户端注册）、RFC 8707（`resource` 参数）、RFC 9207（授权响应 `iss`）、RFC 7009（撤销）。
+
+### §10.10.1 公开 origin
+
+授权服务器签发的每一个 URL 都必须是**绝对、对外可达**的：`issuer`、`resource`、`authorization_endpoint`、401 里的 `resource_metadata`。来源只有一个：
+
+| 场景 | 来源 |
+|---|---|
+| 配了 `PUBLIC_ORIGIN` | 就用它（如 `https://meme.example.com`，不带末尾 `/`，必须是 `https://`） |
+| 未配置 | 由请求的 `Host`（及反代传入的 `X-Forwarded-Proto`）推导 |
+
+**生产必须显式配置 `PUBLIC_ORIGIN`**，写进 [环境变量清单](../docs/environments.md#1-环境变量) 与 `.env.example`。推导只服务本地开发；反代后推导出的绝对 URL 一旦错了，表现是客户端拿到一个连不上的 `token_endpoint`，错误离根因很远。
+
+- 资源标识符（`resource`）：`<origin>/mcp`。**必须与 `/mcp` 的实际对外地址逐字一致**，包括不加末尾斜杠。
+- 授权服务器标识符（`issuer`）：`<origin>`。本项目版本是源服务器（同源），`issuer` 不带路径。
+
+### §10.10.2 客户端注册（DCR）
+
+托管客户端没有人工填 `client_id` 的入口，v1 用 **RFC 7591 动态客户端注册**：`POST /oauth/register`。CIMD 不实现（见 [§10.9](#109-明确不做)）。
+
+| 项 | 规则 |
+|---|---|
+| 请求 | `{ client_name, redirect_uris: [...], token_endpoint_auth_method?: "none", grant_types?, response_types? }`；未知字段忽略，不报错（RFC 7591 对客户端的宽容要求） |
+| `redirect_uris` | 至少 1 个、最多 10 个。每项必须是 `https://`，或 `http://localhost` / `http://127.0.0.1`（任意端口，允许路径）。**不允许 `fragment`**。其余整项拒绝 |
+| `client_name` | 展示用，截断到 64 字，清洗控制字符；缺省为 `未命名应用`。**不做信任判断**——所有 DCR 注册的客户端在同意页上一律标为未验证 |
+| `token_endpoint_auth_method` | 只接受 `none`（缺省即 `none`）；其它值 `400 invalid_client_metadata` |
+| 返回 | 201：`client_id`（`mmc_` + 32 字节 base64url）、`client_id_issued_at`、回显规范化后的注册参数；`token_endpoint_auth_method: "none"`。**不下发 `client_secret`** |
+| 限流 | 10 次/小时/IP，50 次/天/IP；超限 `429` + `Retry-After`。全局客户端数上限由实现定（默认 5000），超过返回 `429` |
+
+`client_id` 存在 `oauth_clients`（[§5.10](05-data-models.md#510-oauth-数据模型)）。**注册本身不产生任何权限**；权限只在用户于同意页点「允许」之后出现。
+
+### §10.10.3 授权请求
+
+`GET /oauth/authorize`，参数按 RFC 6749 + PKCE（RFC 7636）+ RFC 8707：
+
+| 参数 | 规则 |
+|---|---|
+| `response_type` | 只接受 `code` |
+| `client_id` | 必须已注册 |
+| `redirect_uri` | 必须与注册列表中某一项**逐字相等**。**不做前缀匹配、不做通配、不补末尾斜杠** |
+| `code_challenge` | 必须。43 字符 base64url（SHA-256 摘要） |
+| `code_challenge_method` | 只接受 `S256`；缺省或 `plain` 一律拒绝 |
+| `scope` | 可选。v1 只有一个：`mememio:read`。缺省即 `mememio:read`；请求未知 scope 直接拒绝（`invalid_scope`），避免客户端以为拿到了更多权限 |
+| `state` | 原样回传，不做解释 |
+| `resource` | 可选。必须等于资源标识符 `<origin>/mcp`，否则 `invalid_target`；缺省按资源标识符处理 |
+| `nonce` | 不接受（OIDC 不在范围） |
+
+**错误处理的两条分支必须分清：** `client_id` 或 `redirect_uri` 任一不合法时，**不得**重定向——直接回 400 + `application/json`（防开放重定向）；两者都合法、错误发生在其后（`response_type`、scope、`resource`、`code_challenge`）时，302 回 `redirect_uri`，带 `error`、`error_description`、原样 `state`、`iss`。
+
+**校验通过后不直接发码**，而是：
+
+1. 生成一次性 `ticket`（32 字节随机，库里存 `sha256`），10 分钟过期；
+2. 302 到 `<origin>/oauth/consent?ticket=<ticket>`——这是 **SPA 路由**，页面内容由 web 负责，api 不渲染 HTML。
+
+**同意必须基于 cookie 会话。** 未登录时 302 到 `/login?next=<本端点>`，其中 `next` 是**带原查询串的 `/oauth/authorize`**，登录后由授权端点重新校验并签票（见下方「为什么不先签票再登录」）；`next` 只接受站内相对路径。**OAuth 令牌不得用于同意与管理端点**——与 §10.3「两种凭证互不通用」同一条规则，反向也成立。
+
+**为什么不先签票再登录。** ticket 在 [§5.10](05-data-models.md#510-oauth-数据模型) 里 `user_id` 非空、[§6.10](06-endpoints.md#610-oauth-授权管理) 要求它属于当前会话用户——没有登录就没有可以绑定的用户，签不出来。两条路都能走通：给 ticket 允许 `user_id` 为空、登录后再回填，或者在登录后重走授权端点。**取后者**：前者会让票在未认证状态下就存在于库里（任何能触发 `GET /oauth/authorize` 的人都能造出一批无主票，靠 10 分钟 TTL 兜着），回填又是一次「同一张票在两个人手里是什么语义」的额外判断；重走端点则让票永远只在一个已认证会话下诞生，10 分钟也从那一刻开始算，代价只是客户端多经一次 302。
+
+> **2026-10-31 修订**：本节原写「302 到 `/login?next=/oauth/consent?ticket=...`」，与 §5.10 的 `user_id not null` 自相矛盾——那条 `next` 里的 ticket 在生产上永远不存在。api 端实现时按「重走授权端点」落地，此处改为与实现一致；web 端的 `next` 处理器只要求「站内相对路径」，带查询串的 `/oauth/authorize?...` 走同一条校验。
+
+### §10.10.4 同意与操作端点
+
+以下端点都在 `/api/v1/oauth/` 下，**全部要求 cookie 会话**，不接受 Bearer（[§6.10](06-endpoints.md#610-oauth-授权管理)）：
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/authorize/{ticket}` | 返回同意页所需信息：`clientName`、`clientId`、`redirectHost`、`scope`、`expiresAt`。ticket 无效/过期/已用 → `NOT_FOUND` |
+| POST | `/authorize/{ticket}` | `{ decision: "approve" \| "deny" }`。approve 生成授权码与 grant，返回 `{ redirectTo }`；deny 返回带 `error=access_denied` 的 `redirectTo`。**ticket 单次使用**，重放 `NOT_FOUND` |
+| GET | `/grants` | 已连接应用列表 |
+| DELETE | `/grants/{id}` | 撤销授权，幂等；他人或不存在的 id 一律 `NOT_FOUND` |
+
+同意页必须展示（文案见 [§10.8](#108-文案契约)）：应用名、回跳**主机**（不是完整 URL）、作用域说明「只读，能读整个共享库」、以及「内容范围与过滤器沿用你的 MCP 设置」。DCR 注册的应用一律标注未验证。
+
+**授权码**：`code` 形态 `mco_` + 32 字节 base64url，库里只存 `sha256`，**5 分钟**过期、**单次使用**，绑定 `client_id` + `user_id` + `redirect_uri` + `code_challenge` + `resource`。码被重放时：拒绝请求，并**撤销该 grant**（怀疑泄漏）。
+
+### §10.10.5 令牌端点
+
+`POST /oauth/token`，`application/x-www-form-urlencoded`。**鉴权方法只有公户端**：不接受 `client_secret`，`client_id` 必填。
+
+| `grant_type` | 参数 | 校验 |
+|---|---|---|
+| `authorization_code` | `code`、`redirect_uri`、`client_id`、`code_verifier`、`resource?` | 码存在、未用过、未过期；`client_id` / `redirect_uri` / `resource` 与发码时一致；`base64url(sha256(verifier)) === code_challenge`。任一不符 → `400 invalid_grant` |
+| `refresh_token` | `refresh_token`、`client_id` | 刷新令牌存在、未过期、未被旋转过；`client_id` 与授权一致 |
+
+响应（`Cache-Control: no-store`、`Pragma: no-cache`）：
+
+```json
+{
+  "access_token": "mcp_…", "token_type": "Bearer",
+  "expires_in": 3600, "scope": "mememio:read",
+  "refresh_token": "mmr_…"
+}
+```
+
+| 项 | 规则 |
+|---|---|
+| 访问令牌 | `mcp_` + 32 字节 base64url——**与 PAT 同形状**，`mcp/auth.ts` 的校验链一行不改；寿命 **1 小时**；写 `access_tokens`（`kind='oauth'`，带 `grant_id`） |
+| 刷新令牌 | `mmr_` + 32 字节 base64url，只存哈希；**30 天滑动**，每次刷新都旋转（旧的立刻作废，发新的） |
+| 刷新令牌复用 | 用已经旋转过的令牌再来一次 → **撤销整条 grant**（其访问令牌与刷新令牌全部作废），返回 `400 invalid_grant` |
+| 失败 | RFC 6749 §5.2 的 JSON 错误体 + 400；**不返回**项目错误信封（[§2.1](02-errors.md) 不适用于协议端点） |
+| 限流 | 30 次/分钟/IP，超限 `429` |
+
+访问令牌不占 PAT 的「每人 10 个」名额；上限改为**每用户 20 条活跃授权（grant）**，超过时同意页提交返回 `VALIDATION_FAILED` 并提示先撤销旧的。访问令牌过期后不自动续；客户端用刷新令牌续，这是标准行为。
+
+### §10.10.6 撤销
+
+`POST /oauth/revoke`（RFC 7009），表单 `token` + 可选 `client_id`、`token_type_hint`。接受访问令牌与刷新令牌；**未知令牌一律 200**（防探测）；撤销刷新令牌 = 撤销整条 grant。与 `DELETE /api/v1/oauth/grants/{id}` 是同一语义的两个入口。
+
+撤销 grant（任一入口）必须在**同一事务**里：grant 置 `revoked_at`、其全部访问令牌置 `revoked_at`、其全部刷新令牌删除。**撤销后下一次 MCP 请求立即 `401`**，与 PAT 撤销一致。
+
+### §10.10.7 发现文档
+
+| 路径 | 内容 |
+|---|---|
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 根形式 |
+| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 按路径插入形式。**两种都提供**——客户端两种都会试，只给一种会让一部分客户端发现失败 |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 |
+
+受保护资源元数据：
+
+```json
+{
+  "resource": "<origin>/mcp",
+  "authorization_servers": ["<origin>"],
+  "scopes_supported": ["mememio:read"],
+  "bearer_methods_supported": ["header"],
+  "resource_name": "Mememio"
+}
+```
+
+授权服务器元数据：
+
+```json
+{
+  "issuer": "<origin>",
+  "authorization_endpoint": "<origin>/oauth/authorize",
+  "token_endpoint": "<origin>/oauth/token",
+  "registration_endpoint": "<origin>/oauth/register",
+  "revocation_endpoint": "<origin>/oauth/revoke",
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "code_challenge_methods_supported": ["S256"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "revocation_endpoint_auth_methods_supported": ["none"],
+  "scopes_supported": ["mememio:read"],
+  "authorization_response_iss_parameter_supported": true
+}
+```
+
+**`code_challenge_methods_supported` 缺失 = 合规客户端直接拒绝发起授权**，这是这份元数据里最容易漏、后果最直接的一个字段。
+
+三个发现文档允许跨域读取：`Access-Control-Allow-Origin: *`，`Cache-Control: max-age=300`。这是本节**唯一**的 CORS 例外；`/mcp` 仍然对带 `Origin` 的请求一律 `403`（[§10.2](#102-端点与传输)）。
+
+### §10.10.8 令牌的权限范围
+
+OAuth 访问令牌在 `/mcp` 上**与 PAT 完全等价**：同一张表、同一校验路径、同一限流 bucket、同样继承用户级 MCP 设置（成人向、过滤器）。不是「更宽的令牌」，也不是「更窄的令牌」。
+
+「内容范围与过滤器沿用你的 MCP 设置」要写进同意页，因为用户授权的是**一个持续读取整个共享库的应用**，这比一次浏览器登录更值得明说。
+
+### §10.10.9 安全要求（逐条验收）
+
+1. PKCE 只认 S256；`code_verifier` 长度 43–128、字符集 `[A-Za-z0-9._~-]`。
+2. `redirect_uri` 注册时与授权时都做**逐字匹配**；任何未注册值不得出现在 302 的 `Location` 里。
+3. 授权码、ticket、刷新令牌**库里只存哈希**；日志、错误 message/details、URL、非 token 端点响应里都不得出现任何令牌值。
+4. 授权响应带 `iss`（RFC 9207）；`state` 原样回传。
+5. 公户端刷新令牌必须旋转；复用即撤销 grant。
+6. 授权服务器全部端点在 HTTPS 下提供（本地开发 `http://localhost` 豁免）；redirect_uri 只允许 HTTPS 或 localhost/127.0.0.1。
+7. 同意页不得自动批准；POST 同意需要 cookie 会话，并且必须校验 `Origin` 或 `Sec-Fetch-Site`（同源），防跨站提交。
+8. 令牌端点的响应体不进入访问日志（现有日志只记 `tokenId` / `userId`，继续执行）。
+
+### §10.10.10 与 PAT 的关系
+
+| 项 | PAT | OAuth 访问令牌 |
+|---|---|---|
+| 签发 | 用户手动创建 | 授权码流程 |
+| 寿命 | 用户选，可永不过期 | 1 小时，靠刷新令牌续 |
+| 名额 | 每用户 10 个 | 每用户 20 条 grant |
+| 管理入口 | 设置页令牌列表 | 设置页「已连接应用」列表 |
+| 在 `/mcp` 上 | 等价 | 等价 |
+| 在 `/api/v1` 上 | 不可用 | 不可用（同意与管理只认 cookie 会话） |
+
+**PAT 的存在理由不变**：脚本、自建 bot、一条 `curl` 就能测通的自测。**OAuth 的存在理由是托管客户端**。两者不互相替代。

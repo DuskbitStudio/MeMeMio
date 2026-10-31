@@ -20,6 +20,9 @@ R2_BUCKET=<bucket>
 R2_KEY_PREFIX=${APP_SLUG}/        # ← 共用 bucket 时必须，否则对象互相覆盖。以 / 结尾
 R2_PUBLIC_BASE_URL=https://pub-xxxx.r2.dev   # ← 必填，不带末尾 /，也不要把前缀拼进去
 
+# MCP OAuth 2.1 授权服务器（可选；生产强烈建议显式配置）
+PUBLIC_ORIGIN=https://<你的域名>   # 不带末尾 /；不配则按请求 Host 推导（只适合本地开发）
+
 # 本地 S3 兼容存储（可选；不设就走 Cloudflare R2）
 R2_ENDPOINT=http://mememio-s3:9000   # 设了 R2_ACCOUNT_ID 可以不填
 R2_FORCE_PATH_STYLE=true             # 非 AWS 实现通常必须 true

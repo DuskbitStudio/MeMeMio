@@ -842,3 +842,72 @@ GET /persons?q=塞西&series=none&named=true&minCount=2&cursor=…&limit=40
 - `PUT /mcp/filter` 请求体**恰好** `{ excluded: {...} }`：未知维度、非数组、词表外的值、非空 `ratings` 都是 `VALIDATION_FAILED`；重复值按出现顺序去重。空数组等于不过滤。
 - **不提供管理员视图**：任何人只能改自己的设置。
 - 两个设置都只影响 MCP（[§10.3.1](10-mcp.md#1031-内容范围成人向默认关闭)、[§10.3.2](10-mcp.md#1032-过滤器按标签排除)），不影响 Web 端读路径。
+
+## §6.10 OAuth 授权管理
+
+> **状态：`proposed`**（2026-10-31）。[§10.10 OAuth 2.1 授权服务器](10-mcp.md#1010-oauth-21-授权服务器) 的浏览器侧入口，纯新增。**全部要求 cookie 会话（[§3.1](03-auth-permission.md#31-会话)），不接受任何 Bearer**——包括它自己签发的访问令牌。
+
+四个端点，语义见契约 [§10.10.4](10-mcp.md#10104-同意与操作端点)：
+
+| 方法 | 路径 | 权限 |
+|---|---|---|
+| GET | `/oauth/authorize/{ticket}` | 本人（cookie 会话） |
+| POST | `/oauth/authorize/{ticket}` | 本人（cookie 会话） |
+| GET | `/oauth/grants` | 本人（cookie 会话） |
+| DELETE | `/oauth/grants/{id}` | 本人（cookie 会话） |
+
+### `GET /oauth/authorize/{ticket}`
+
+```
+{
+  clientName: "ChatGPT",
+  clientId: "mmc_…",           // 展示用；同意页不需要区分
+  redirectHost: "chatgpt.com", // 只给主机名，不给我完整 URL
+  scope: "mememio:read",
+  expiresAt: "2026-10-31T12:34:56.000Z"
+}
+```
+
+- ticket 无效、已过期、已被使用、或不属于当前会话 → 一律 `NOT_FOUND`（不区分，避免探测）。
+- **ticket 与本提交的会话绑定**：签发 ticket 时的 `user_id` 存入行内，换一个账号打开同一链接 → `NOT_FOUND`。
+
+### `POST /oauth/authorize/{ticket}`
+
+```
+{ decision: "approve" }   // 或 "deny"
+```
+
+- 请求体**恰好**这一个字段；其它值 → `VALIDATION_FAILED`。
+- 响应 `{ redirectTo: "https://chatgpt.com/…?code=…&state=…&iss=…" }`。**由服务端生成完整回跳地址**，前端只做 `location.assign`；前端不得自行拼接授权码或参数。
+- `deny` 时 `redirectTo` 带 `error=access_denied`。
+- **ticket 单次使用**：成功后作废；重复提交 → `NOT_FOUND`。
+- approve 时若该用户活跃 grant 已达 20 → `VALIDATION_FAILED`，`details.fields` 指出 `grantLimit`，前端提示先撤销旧授权。
+- 必须校验 `Origin` / `Sec-Fetch-Site` 为同源（[§10.10.9](10-mcp.md#10109-安全要求逐条验收) 第 7 条）。
+
+### `GET /oauth/grants`
+
+```
+{
+  items: [
+    { id, clientName, clientId, redirectHost, createdAt, lastUsedAt, expiresAt }
+  ]
+}
+```
+
+- 按 `createdAt desc`；**只返回未撤销的授权**。
+- `lastUsedAt` = 该 grant 下访问令牌最近一次使用时间（可 `null`）；`expiresAt` = 刷新令牌的到期时间，**滑动更新**。
+- **`redirectHost` 是该 grant 被批准时那一条 `redirect_uri` 的主机名**（[§5.10](05-data-models.md#510-oauth-数据模型) 的 `oauth_grants.redirect_uri`），与同意页显示的是同一个值。**不得取自 `oauth_clients.redirect_uris[0]`**：一个客户端最多登记 10 个回跳地址，取第一个会显示一个用户实际没批准过的地址，用户就没法把列表里的一行和当初点的那个同意页对上。只回主机名、不回完整 URI——路径与查询串不参与识别，多回就是多一处泄露面。
+- 不返回任何令牌值或令牌前缀——**「API Key 不出响应」在这里意味着连前缀都不给**：用户按应用名与回跳主机识别，不按令牌串识别。
+
+### `DELETE /oauth/grants/{id}`
+
+204，**幂等**；同一事务内撤销该 grant 全部访问令牌、删除全部刷新令牌（[§10.10.6](10-mcp.md#10106-撤销)）。不存在或不属于本人 → `NOT_FOUND`。撤销立即生效：客户端下一次 `/mcp` 请求 `401`，先刷新也会因刷新令牌已删而失败。
+
+### 错误码
+
+| code | 何时 |
+|---|---|
+| `UNAUTHENTICATED` | 没有有效 cookie 会话 |
+| `VALIDATION_FAILED` | `decision` 不合法；或 approve 时已达 20 条授权上限 |
+| `NOT_FOUND` | ticket / grant 不存在、过期、已用、不属于本人 |
+| `FORBIDDEN` | 跨站提交（`Origin` / `Sec-Fetch-Site` 不同源） |

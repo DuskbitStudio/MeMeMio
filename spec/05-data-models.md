@@ -371,6 +371,8 @@ access_tokens(
   name         text not null,            -- 设备/渠道标签，1–64 字，不要求唯一
   prefix       text not null,            -- 展示用，令牌前 12 个字符（含 mcp_）
   token_hash   text not null,            -- sha256(token) 十六进制
+  kind         text not null default 'pat', -- 'pat' | 'oauth'；见 §5.10
+  grant_id     uuid references oauth_grants(id) on delete set null, -- oauth 专属
   created_at   timestamptz not null default now(),
   last_used_at timestamptz,              -- 从未使用为 null
   expires_at   timestamptz,              -- null = 永不过期
@@ -385,6 +387,7 @@ access_tokens(
 - `last_used_at` 的写必须节流（实现约束）：MCP 每个请求都可能命中一次令牌校验，逐请求 UPDATE 是写放大。
 - `revoked_at` / `expires_at` 非空的记录**保留**，用于回答"这个令牌什么时候没的"；列表接口只展示仍然有效的那些（[§6.8](06-endpoints.md#68-访问令牌)）。
 - 用户被物理删除时级联删除；这与 `sessions` 的 `on delete cascade` 同一条规则。
+- **`kind` 区分签发方式**（2026-10-31 新增，[§9.38](09-decisions.md)）：`pat` 由用户在设置页创建，`oauth` 由授权码流程签发（[§10.10](10-mcp.md#1010-oauth-21-授权服务器)）。两者在 `/mcp` 上走同一条校验路径。**「每人 10 个」只数 `kind='pat'`**；OAuth 令牌以 grant 为撤销单位，不挤压 PAT 名额，也不出现在 §6.8 的列表里。`grant_id` 只对 `oauth` 有意义（PAT 为 null）。
 
 ## §5.9 MCP 设置
 
@@ -418,3 +421,69 @@ user_mcp_settings(
 **它与 `access_tokens` 是两层不同的东西：** 令牌是"谁能调"，设置是"调到什么范围"。一个用户的所有令牌共享同一个设置；v1 不做按令牌区分——那会把设置页变成每个令牌一个开关，而真实需求（家庭 bot / 私人 bot）还没出现。
 
 **只影响 MCP。** Web 端的搜索、浏览、收藏仍按 [§3.3](03-auth-permission.md#33-权限矩阵) 全库可读，不因这个开关隐藏任何图。
+
+## §5.10 OAuth 数据模型
+
+> **状态：`proposed`**（2026-10-31）。[§10.10 OAuth 2.1 授权服务器](10-mcp.md#1010-oauth-21-授权服务器) 的表结构，纯新增。所有 secret 类列（票、码、刷新令牌）**只存 `sha256` 十六进制**，与 [§5.8](05-data-models.md#58-访问令牌) 同一条规则。
+
+```sql
+oauth_clients(
+  client_id     text primary key,          -- mmc_ + base64url(32B)
+  client_name   text not null,             -- 清洗后最长 64 字
+  redirect_uris jsonb not null,            -- ["https://…"]，1–10 项，注册时已校验
+  created_at    timestamptz not null default now(),
+  last_used_at  timestamptz
+);
+
+oauth_authorization_requests(              -- 待同意的 ticket
+  ticket_hash     text primary key,
+  client_id       text not null references oauth_clients(client_id) on delete cascade,
+  user_id         uuid not null references users(id) on delete cascade,
+  redirect_uri    text not null,
+  code_challenge  text not null,
+  resource        text not null,
+  scope           text not null,
+  state           text,
+  expires_at      timestamptz not null,    -- 签发 + 10 分钟
+  created_at      timestamptz not null default now()
+);
+
+oauth_authorization_codes(
+  code_hash       text primary key,
+  client_id       text not null references oauth_clients(client_id) on delete cascade,
+  user_id         uuid not null references users(id) on delete cascade,
+  grant_id        uuid not null references oauth_grants(id) on delete cascade,
+  redirect_uri    text not null,
+  code_challenge  text not null,
+  resource        text not null,
+  expires_at      timestamptz not null,    -- 签发 + 5 分钟
+  used_at         timestamptz
+);
+
+oauth_grants(
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references users(id) on delete cascade,
+  client_id     text not null references oauth_clients(client_id) on delete cascade,
+  scope         text not null,
+  resource      text not null,
+  redirect_uri  text not null,             -- 批准时那一条，不是 redirect_uris[0]
+  created_at    timestamptz not null default now(),
+  last_used_at  timestamptz,
+  revoked_at    timestamptz
+);
+
+oauth_refresh_tokens(
+  token_hash    text primary key,
+  grant_id      uuid not null references oauth_grants(id) on delete cascade,
+  expires_at    timestamptz not null,      -- 30 天滑动
+  rotated_at    timestamptz,               -- 非空 = 已用过，再来即视为复用
+  replaced_by   text                       -- 旋转后的新令牌哈希，审计用
+);
+```
+
+- **授权（grant）是撤销单位**：`DELETE /api/v1/oauth/grants/{id}` 与 `POST /oauth/revoke`（刷新令牌）都落到它，一个事务里撤访问令牌、删刷新令牌。
+- **`oauth_grants` 上建索引 `(user_id, revoked_at)`**：同意提交时要数活跃 grant（上限 20），列表也按它查。
+- `oauth_clients` 与 `oauth_grants` 之间是**多对多**：一个用户对同一应用可以有**多条** grant（比如先用后撤销、再授权一次），不做 unique。
+- **`access_tokens.grant_id` 是单一外键**（[§5.8](05-data-models.md#58-访问令牌)），`on delete set null` 而非 cascade：grant 物理删除时令牌行保留为已撤销状态，审计语义与 PAT 一致。实际路径上 grant 只软删（`revoked_at`），cascade 用于清库。
+- **清理**：过期超过 1 天的 `oauth_authorization_requests` / `oauth_authorization_codes` / `oauth_refresh_tokens` 由定时任务（或惰性删除）清掉；`oauth_grants` 不自动删，除非所属用户被删。
+- 新表全部进 `api/tests/helpers/test-db.ts` 的 truncate 清单。

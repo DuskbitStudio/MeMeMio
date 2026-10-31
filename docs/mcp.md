@@ -2,7 +2,7 @@
 
 > **状态（2026-10-23）：契约 `accepted`；两端实现完成并通过自动化闸门；真实客户端与 IM 渠道的联合验收进行中。** 端点和设置页按 [SPEC §10](../spec/10-mcp.md) 设计；文中标「接入时实测」的条目表示**本文没有承诺它一定可用**（渠道字段与限额以官方文档为准）。契约本身以 SPEC 为准。
 
-**MCP（Model Context Protocol）是 `api` 的第二个外部接口：让 Claude、Cursor、Cherry Studio 或你自己的 IM 机器人，用一句想表达的话检索共享表情包库，拿到可直接交付的图片地址与元数据。** 它与 `/api/v1` 并列、不替代 REST；`web` 仍然只消费 REST。只读，不需要新增任何环境变量。
+**MCP（Model Context Protocol）是 `api` 的第二个外部接口：让 Claude、Cursor、Cherry Studio 或你自己的 IM 机器人，用一句想表达的话检索共享表情包库，拿到可直接交付的图片地址与元数据。** 它与 `/api/v1` 并列、不替代 REST；`web` 仍然只消费 REST。只读。两种接入方式：**个人访问令牌（PAT）**，或 2026-10-31 起新增的 **OAuth 2.1 授权**（给没有地方填请求头的托管客户端）。PAT 路径不需要新增任何环境变量；OAuth 授权服务器在生产建议配一个 `PUBLIC_ORIGIN`（[§10.10](../spec/10-mcp.md#1010-oauth-21-授权服务器)）。
 
 ## 1. 边界：只读、只交图、不发渠道
 
@@ -10,7 +10,7 @@
 |---|---|
 | 按语义检索、按标签筛选、随机取图、按 id 取图 | 上传、编辑、删除、收藏、重打标、管理、改配置 |
 | 返回 `url` / `thumbUrl` 与元数据 | 把图发到微信 / QQ / LINE / 钉钉 / 飞书 |
-| 用个人访问令牌读**该用户可读的整个共享库** | OAuth 登录、浏览器内 MCP 客户端、跨用户权限 |
+| 用个人访问令牌或 OAuth 2.1 访问令牌读**该用户可读的整个共享库** | 浏览器内 MCP 客户端、跨用户权限、写操作 |
 
 - **只读。** 不暴露用户、邀请码、密钥；令牌能读的范围与登录后一致——**是整个共享库**，不是「只看自己的图」。
 - **只交付图与 URL。** 真正发到渠道由你的机器人调用各渠道官方接口完成。MCP 不代理图片、不转码；渠道要的格式由机器人处理（聊天客户端可以内联小图，有大小上限，见 [SPEC §10.5](../spec/10-mcp.md)）。
@@ -23,7 +23,7 @@
 
 1. **开通 R2 公开访问。** 工具返回的 `url` / `thumbUrl` 是 R2 公开地址；bucket 没开 Public Access 时，聊天客户端和 IM 渠道都下载不到图。步骤见[部署手册 §8.2](deployment.md#82-公开访问)。
 2. **反代透传 `/mcp`。** 地址与 `/api` 同源，TLS 由反代终结；不需要为 `/mcp` 单独写 `location`，但要注意缓冲、超时和请求体上限，见[部署手册 §9.3](deployment.md#93-反代)。
-3. **不需要新增环境变量。** 端点默认挂载，没有开关；要停用就撤销全部令牌或回滚版本（[SPEC §10.2](../spec/10-mcp.md#102-端点与传输)）。
+3. **PAT 不需要新增环境变量。** 端点默认挂载，没有开关；要停用就撤销全部令牌或回滚版本（[SPEC §10.2](../spec/10-mcp.md#102-端点与传输)）。**要用 OAuth 授权（§3.6）**，生产要配 `PUBLIC_ORIGIN`（见 [环境变量](environments.md#1-环境变量)），否则授权服务器签发的绝对 URL 会按反代传进来的 Host 猜，猜错了客户端拿到一个连不上的地址。反代还要放行 `/.well-known/` 与 `/oauth/`。
 
 ### 2.2 创建令牌
 
@@ -100,7 +100,7 @@ claude mcp add --transport http mememio https://<你的域名>/mcp \
 }
 ```
 
-改完**完全退出并重启客户端**。不同客户端 / 版本对远程 HTTP 的支持不一样：只支持 stdio 的版本用 §3.5 的桥；只走 OAuth 的宿主（如 `claude.ai` connectors）不能直接用这种静态请求头，见 §8。
+改完**完全退出并重启客户端**。不同客户端 / 版本对远程 HTTP 的支持不一样：只支持 stdio 的版本用 §3.5 的桥；只走 OAuth 的宿主（如 `claude.ai` connectors、ChatGPT connector）不能填静态请求头，按 §3.6 走授权流程。
 
 ### 3.3 Cursor
 
@@ -160,6 +160,24 @@ npx -y mcp-remote https://<你的域名>/mcp \
 - 首次运行会下载依赖，机器需要能访问 npm；内网环境先 `npm i -g mcp-remote`，再把 `command` 换成 `mcp-remote`，并删掉 `args` 里的 `-y` 和 `mcp-remote` 两项。
 - Windows 上部分客户端不认 `npx` 直接作为命令，改成 `cmd` + `/c` + `npx`，以客户端文档为准。
 - `--header` 的参数格式随 `mcp-remote` 版本可能变化，跑 `npx mcp-remote --help` 确认。
+
+### 3.6 只走 OAuth 的宿主：直接在客户端里授权
+
+`claude.ai` connectors、ChatGPT 的自定义 connector 这类宿主**没有填写请求头的地方**，只会按 MCP 授权规范自己完成 OAuth 2.1：发现 `/.well-known/oauth-protected-resource/mcp` → 动态注册 → 跳授权页 → 换令牌。2026-10-31 起本服务支持这条路（[SPEC §10.10](../spec/10-mcp.md#1010-oauth-21-授权服务器)），**PAT 照旧可用，不用改现有配置**。
+
+1. 在宿主里像平常一样添加 MCP 服务器，地址仍是 `https://<你的域名>/mcp`，不填任何请求头；
+2. 宿主会把你跳到本站的授权页，用浏览器登录（没登录会先跳登录页，登录后自动回来）；
+3. 同意页会显示应用名、回跳主机，并标注「自助注册、未验证」——**确认是你自己加的那个客户端再点「允许」**；
+4. 之后宿主拿到 1 小时有效的访问令牌并自动续期。
+
+管理：设置页 →「MCP 接入」→「已连接应用」里能看到哪些客户端接过权限，撤销后它们立即 401，需要重新授权。
+
+几条要知道的边界：
+
+- **授权范围只有一个：只读。** 和 PAT 完全一样，能读整个共享库；不能上传、修改、删除。
+- **同意和撤销只认浏览器登录态**，不能用令牌代替——令牌持有人不能替你在浏览器里批准一个新应用。
+- **每个用户最多 20 个已连接应用**。到上限时先撤销不用的。
+- **部署方要配 `PUBLIC_ORIGIN`**，否则反代后面推导出的授权地址可能连不上（见 §2.1 第 3 条、[环境变量](environments.md#1-环境变量)）。
 
 ## 4. 工具清单
 
@@ -269,7 +287,7 @@ MCP 不负责发图，渠道适配是机器人侧的事。共同流程只有三�
 3. 是否过期、是否已撤销（设置页列表里消失即不可用）；
 4. 是不是只带了 cookie——`/mcp` 不认 cookie，浏览器登录态在这里无效。
 
-服务端会回 `WWW-Authenticate: Bearer realm="mememio"`，但不实现 OAuth，客户端不要去找授权流程。
+服务端会回 `WWW-Authenticate: Bearer realm="mememio", resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp", scope="mememio:read"`。**支持 OAuth 的客户端会自己顺着 `resource_metadata` 找授权流程**（§3.6）；手工配请求头的客户端忽略它就行。你的客户端如果不会自动授权、又需要令牌，按 §2.2 创建一个 PAT 填进去。
 
 ### 403：带 `Origin` 头
 
@@ -286,7 +304,7 @@ MCP 端点拒绝一切带 `Origin` 的请求（不提供 CORS），所以**浏�
 - 客户端没完成握手：保存配置后**完全重启**客户端，再刷新 MCP 面板；
 - 自定义请求头没带上：有些客户端把 headers 放在二级设置里，或只对某种传输类型生效；
 - 客户端只支持 stdio：用 §3.5 的 `mcp-remote`；
-- 客户端只走 OAuth 的宿主（如 `claude.ai` connectors）：PAT 直连不了，用桥接或换原生客户端；本服务不实现 OAuth（[SPEC §10.9](../spec/10-mcp.md)）；
+- 客户端只走 OAuth 的宿主（如 `claude.ai` connectors、ChatGPT connector）：不用 PAT，按 §3.6 在客户端里直接授权；宿主不认授权流程时，换原生客户端或 `mcp-remote` 桥；
 - 协议版本不匹配：服务端支持 2026-07-28 与 2025 代 `initialize` 客户端，不匹配时可能 400，升级客户端或用支持 Streamable HTTP 的版本。
 
 ### 图片打不开
@@ -333,7 +351,7 @@ MCP 请求体上限 256 KiB。正常工具参数远小于这个值——不要�
 
 ## 9. 相关
 
-- 契约：[SPEC §10](../spec/10-mcp.md)；令牌模型 [§5.8](../spec/05-data-models.md#58-访问令牌)；令牌管理端点 [§6.8](../spec/06-endpoints.md#68-访问令牌)；MCP 设置模型 [§5.9](../spec/05-data-models.md#59-mcp-设置) 与端点 [§6.9](../spec/06-endpoints.md#69-mcp-设置)；设计决策 [§9.35](../spec/09-decisions.md)、[§9.36](../spec/09-decisions.md)、[§9.37](../spec/09-decisions.md)。
-- 部署：[部署手册](deployment.md)（反代 §9.3、R2 公开访问 §8.2）；[环境变量](environments.md)——**MCP 不需要新增任何变量**。
+- 契约：[SPEC §10](../spec/10-mcp.md)；令牌模型 [§5.8](../spec/05-data-models.md#58-访问令牌)；令牌管理端点 [§6.8](../spec/06-endpoints.md#68-访问令牌)；MCP 设置模型 [§5.9](../spec/05-data-models.md#59-mcp-设置) 与端点 [§6.9](../spec/06-endpoints.md#69-mcp-设置)；OAuth 授权服务器 [§10.10](../spec/10-mcp.md#1010-oauth-21-授权服务器)、数据模型 [§5.10](../spec/05-data-models.md#510-oauth-数据模型)、管理端点 [§6.10](../spec/06-endpoints.md#610-oauth-授权管理)；设计决策 [§9.35](../spec/09-decisions.md)、[§9.36](../spec/09-decisions.md)、[§9.37](../spec/09-decisions.md)、[§9.38](../spec/09-decisions.md)。
+- 部署：[部署手册](deployment.md)（反代 §9.3、R2 公开访问 §8.2）；[环境变量](environments.md#1-环境变量)——PAT **不需要任何变量**，OAuth 授权服务器生产建议配 `PUBLIC_ORIGIN`。
 - 实现约束与测试面：[`api/agents/rules/mcp.md`](../api/agents/rules/mcp.md)。
 - 当前进度与联合验收：任务板里的 MCP 接入任务；状态变更见 [SPEC §10.7](../spec/10-mcp.md#107-兼容与状态)。
