@@ -32,6 +32,12 @@ export type AuditLogsResponse = InferResponseType<typeof api.api.v1.mcp.logs.$ge
  *
  * 客户端**不得从别的字段反推**原文（§6.11 明写），只能按「是不是自己的行」决定显示原文
  * 还是「仅本人可见」。判定规则见 `features/audit/audit-copy.ts` 的 `readQueryText`。
+ *
+ * `resultMemeIds` 同理是隐私字段（他人行 `null`），而 `resultCount` **不是**——
+ * 数量两种 `scope` 都给，判定规则见 `readReturnText`。
+ *
+ * 形状完全来自 RPC（`web/AGENTS.md` §4），本文件不补字段：api 加了 `resultCount` /
+ * `resultMemeIds` 之后这里自动跟着变，web 侧没有第二个形状。
  */
 export type AuditLogItem = AuditLogsResponse['items'][number]
 

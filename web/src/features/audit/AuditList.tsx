@@ -18,7 +18,9 @@
  * `Table` 自带的那层 `overflow-x-auto`，在中等宽度（md–lg）下照样能横着滚。
  */
 
+import { useState } from 'react'
 import { Badge } from '../../components/ui/badge'
+import { Button } from '../../components/ui/button'
 import {
   Table,
   TableBody,
@@ -30,7 +32,16 @@ import {
 import type { AuditLogItem } from '../../lib/api-audit'
 import { formatDate } from '../../lib/format'
 import { cn } from '../../lib/utils'
-import { AUDIT_COPY, readQueryText, readTokenLabel } from './audit-copy'
+import { TOUCH } from '../../lib/touch'
+import {
+  AUDIT_COPY,
+  canOpenResult,
+  readQueryText,
+  readResultDetailText,
+  readReturnText,
+  readTokenLabel,
+} from './audit-copy'
+import { AuditResultSheet } from './AuditResultSheet'
 
 function OutcomeBadge({ outcome }: { outcome: AuditLogItem['outcome'] }) {
   // 失败用 destructive 的 `outline` 边框而不是实心红：一行记录的结果是**状态**，
@@ -54,6 +65,48 @@ function QueryText({ text }: { text: string }) {
   )
 }
 
+/**
+ * 「返回」那一格（SPEC §10.8）：**张数恒显示，明细按身份给**。
+ *
+ * 三档文案由 `readReturnText` 定，这里不判 `outcome` / `tool`。入口由 `canOpenResult`
+ * 定——他人的行有张数但没有按钮（`resultMemeIds` 是 `null`，`readResultDetailText` 给
+ * 「仅本人可见」）；`list_vocab` 与失败的行既没有图也没有按钮，那一格只剩「未返回图」。
+ *
+ * ⚠️ **没有灰色按钮这一档**：灰按钮会让人以为点一下能加载。
+ */
+function ReturnCell({
+  item,
+  meId,
+  scope,
+  onOpen,
+}: {
+  item: AuditLogItem
+  meId: string
+  scope: 'mine' | 'all'
+  onOpen: () => void
+}) {
+  const detail = readResultDetailText(item, { meId, scope })
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      <span className="whitespace-nowrap tabular-nums">{readReturnText(item)}</span>
+      {canOpenResult(item, { meId, scope }) ? (
+        <Button
+          variant="link"
+          size="sm"
+          className={TOUCH}
+          // 一行里可能有好几个同名按钮，读屏按行念完才有上下文；把工具名带上
+          aria-label={`${AUDIT_COPY.drawerOpen}（${item.tool}）`}
+          onClick={onOpen}
+        >
+          {AUDIT_COPY.drawerOpen}
+        </Button>
+      ) : (
+        detail !== null && <span className="text-xs text-muted-foreground">{detail}</span>
+      )}
+    </div>
+  )
+}
+
 export function AuditList({
   items,
   meId,
@@ -63,6 +116,14 @@ export function AuditList({
   meId: string
   scope: 'mine' | 'all'
 }) {
+  /**
+   * 抽屉里那一行；`null` = 关着。
+   *
+   * 存整行而不是 id：抽屉要按 `scope` / `meId` 再判一次本人，而那一行此刻就在手里。
+   * 列表翻页时这一行可能已经不在 `items` 里了，存对象反而不会因为找不到而闪空。
+   */
+  const [openItem, setOpenItem] = useState<AuditLogItem | null>(null)
+
   return (
     <>
       {/* 桌面：`md` 以上 */}
@@ -75,6 +136,7 @@ export function AuditList({
               <TableHead>工具</TableHead>
               <TableHead>检索词</TableHead>
               <TableHead className="w-20">结果</TableHead>
+              <TableHead className="w-32">返回</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -90,6 +152,14 @@ export function AuditList({
                 </TableCell>
                 <TableCell>
                   <OutcomeBadge outcome={item.outcome} />
+                </TableCell>
+                <TableCell>
+                  <ReturnCell
+                    item={item}
+                    meId={meId}
+                    scope={scope}
+                    onOpen={() => setOpenItem(item)}
+                  />
                 </TableCell>
               </TableRow>
             ))}
@@ -112,9 +182,22 @@ export function AuditList({
             </div>
             <p className="font-mono text-xs text-muted-foreground">{item.tool}</p>
             <p className="text-sm text-pretty">{readQueryText(item, { meId, scope })}</p>
+            <ReturnCell
+              item={item}
+              meId={meId}
+              scope={scope}
+              onOpen={() => setOpenItem(item)}
+            />
           </li>
         ))}
       </ul>
+
+      <AuditResultSheet
+        item={openItem}
+        meId={meId}
+        scope={scope}
+        onClose={() => setOpenItem(null)}
+      />
     </>
   )
 }

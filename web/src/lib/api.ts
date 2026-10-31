@@ -215,6 +215,19 @@ export type Meme = MemesResponse['items'][number]
 export type MemeDetail = InferResponseType<MemesClient[':id']['$get']>
 
 /**
+ * `GET /memes/{id}` —— 单条（SPEC §6.3）。审计的详情抽屉按 id 现查就是走它。
+ *
+ * **404 原样抛，不当成功处理**——和 `deleteMeme` 故意相反：那里的目标是「让这一行消失」，
+ * 这里的目标是「看这一张图」，图被软删了本身就是一条要显示出来的信息。调用点按
+ * `NOT_FOUND` 渲染「已删除或不可见」（§10.8），不显示空白格。
+ */
+export async function fetchMeme(id: string): Promise<MemeDetail> {
+  const res = await fetch(`/api/v1/memes/${id}`)
+  if (!res.ok) throw await toApiError(res)
+  return res.json() as Promise<MemeDetail>
+}
+
+/**
  * `PATCH /memes/{id}` 的请求体，**只认描述 + 七个词表维度**（SPEC §6.4.1 / §4.3）。
  *
  * 三种传法含义不同，调用点别混：
