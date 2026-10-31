@@ -52,13 +52,21 @@ export const MAX_ACTIVE_ACCESS_TOKENS = 10
  *
  * ⚠️ 过期判定用**数据库时钟**（`now()`），不是先读出来再和 JS 的 `Date` 比：
  *    读的那一刻没过期、写下去时过期了，就是同一个竞态。与 `findValidSession` 同口径。
+ *
+ * `kind` 是**可选**的，两个调用口径必须分开理解（SPEC §10.10.8）：
+ *
+ * - 校验（`findActiveByHash`）**不传**：OAuth 访问令牌与 PAT 在同一条校验链上，
+ *   传了就会把 OAuth 令牌挡在 `/mcp` 外面，而这正是它存在的理由。
+ * - 计数与列表**传 `'pat'`**：用户的「最多 10 个」和设置页列表是**个人访问令牌**的，
+ *   一次授权不该挤掉一个 PAT 名额，也不该出现在 PAT 列表里。
  */
-function activeConditions(userId?: string) {
+function activeConditions(userId?: string, kind?: 'pat' | 'oauth') {
   const conditions = [
     isNull(accessTokens.revokedAt),
     sql`(${accessTokens.expiresAt} is null or ${accessTokens.expiresAt} > now())`,
   ]
   if (userId !== undefined) conditions.push(eq(accessTokens.userId, userId))
+  if (kind !== undefined) conditions.push(eq(accessTokens.kind, kind))
   return conditions
 }
 
@@ -88,7 +96,8 @@ export async function createAccessToken(
     const counted = await tx
       .select({ count: sql<number>`count(*)::int` })
       .from(accessTokens)
-      .where(and(...activeConditions(input.userId)))
+      // 只数 PAT：OAuth 授权有自己的 20 条上限（SPEC §10.10.5），两者不互相挤压
+      .where(and(...activeConditions(input.userId, 'pat')))
     if ((counted[0]?.count ?? 0) >= MAX_ACTIVE_ACCESS_TOKENS) {
       throw new AppError(
         'VALIDATION_FAILED',
@@ -123,7 +132,8 @@ export async function listActiveTokens(
       expiresAt: accessTokens.expiresAt,
     })
     .from(accessTokens)
-    .where(and(...activeConditions(userId)))
+    // 只列 PAT：OAuth 授权在 `/api/v1/oauth/grants` 那边（§6.10）
+    .where(and(...activeConditions(userId, 'pat')))
     .orderBy(desc(accessTokens.createdAt))
 }
 

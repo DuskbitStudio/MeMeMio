@@ -7,6 +7,7 @@ import {
   type McpServer,
 } from '@modelcontextprotocol/server'
 import { requestId, type RequestIdVariables } from '../middleware/request-id.js'
+import { createOriginResolver } from '../oauth/origin.js'
 import { SEARCH_TOOL_NAMES } from './tool-names.js'
 
 /**
@@ -26,7 +27,8 @@ import { SEARCH_TOOL_NAMES } from './tool-names.js'
  * 1. `requestId` —— 排障以它为准；响应头带 `X-Request-Id`
  * 2. 请求体上限 256 KiB —— **先挡住字节**，后面才敢 peek body 判工具名
  * 3. `Origin` 头一律 403 —— 本服务不支持浏览器内 MCP 客户端，也不提供 CORS
- * 4. Bearer 校验 —— 失败 401 + `WWW-Authenticate`（**不带 `resource_metadata`**）
+ * 4. Bearer 校验 —— 失败 401 + `WWW-Authenticate`，带 `resource_metadata` 与 `scope`
+ *    （SPEC §10.3：只有一个 401 出口，PAT 与 OAuth 访问令牌走同一条校验链）
  * 5. 令牌级限流 —— 全量 120/min，检索类工具 30/min
  * 6. `handler.fetch` —— 协议头 / JSON-RPC 形状 / GET·DELETE 的 405 都交给 SDK
  */
@@ -74,6 +76,13 @@ export type McpAppDeps = {
   onHandlerError(error: Error, requestId?: string): void
   /** 仅供测试：把阈值调小来验 429，生产不要传。 */
   limits?: Partial<McpRateLimits>
+  /**
+   * 公开 origin（SPEC §10.10.1），只用来拼 401 里的 `resource_metadata`。
+   *
+   * 由组装处注入而不是在这里读 env：本文件不 import `env.ts`（见文件头），
+   * 这样 unit 测试构造它时不依赖任何环境变量。`null` = 按请求推导，只适合本地。
+   */
+  publicOrigin: string | null
 }
 
 type McpVariables = RequestIdVariables & { mcpAuth: AuthInfo }
@@ -177,13 +186,19 @@ function withRequestId(response: Response, requestId: string): Response {
 }
 
 /**
- * 401：**带 `WWW-Authenticate: Bearer realm="mememio"`，不带 `resource_metadata`**
- * （SPEC §10.3）。带上它会让客户端去走一条我们没实现的 OAuth 发现流程，
- * 结果是「明明令牌是对的，客户端却报授权服务器不可达」。
+ * 401 挑战（SPEC §10.3）：`realm` + `resource_metadata` + `scope`。
+ *
+ * `resource_metadata` 指向**按路径插入**的那个发现文档
+ * （`/.well-known/oauth-protected-resource/mcp`），客户端由它找到授权服务器并
+ * 自己发起 OAuth。**所有 401 都带它**——无令牌与令牌无效是同一个出口，不按前缀分流：
+ * 一个「有时带、有时不带」的挑战头会让客户端在不同时刻走进两条不同的路径。
+ *
+ * 已经配好 PAT 的客户端不解析这个头，行为与加它之前逐字一致。
  */
-function unauthorized(requestId: string): Response {
+function unauthorized(requestId: string, resourceMetadataUrl: string): Response {
   return jsonRpcError(401, 'Unauthorized', requestId, {
-    'www-authenticate': 'Bearer realm="mememio"',
+    'www-authenticate':
+      `Bearer realm="mememio", resource_metadata="${resourceMetadataUrl}", scope="mememio:read"`,
   })
 }
 
@@ -261,6 +276,8 @@ export function createMcpApp(deps: McpAppDeps): Hono<{ Variables: McpVariables }
     windowMs: deps.limits?.windowMs ?? RATE_WINDOW_MS,
   }
   const limiter = createRateLimiter(limits)
+  // 与 `oauth/app.ts` 同一个解析器：401 里的 `resource_metadata` 与 issuer 必须指同一个 origin
+  const resolveOrigin = createOriginResolver(deps.publicOrigin)
 
   const handler = createMcpHandler((ctx) => deps.buildServer(ctx), {
     // 2026-07-28 + 2025 代全程无状态（SPEC §10.2）
@@ -303,7 +320,10 @@ export function createMcpApp(deps: McpAppDeps): Hono<{ Variables: McpVariables }
     // Bearer 校验。**只认令牌、不认 cookie**（SPEC §10.3）；失败一律 401
     .use('*', async (c, next) => {
       const authInfo = await deps.authenticate(c.req.raw, { requestId: c.get('requestId') })
-      if (authInfo === null) return unauthorized(c.get('requestId'))
+      if (authInfo === null) {
+        const metadata = `${resolveOrigin(c.req.raw)}/.well-known/oauth-protected-resource/mcp`
+        return unauthorized(c.get('requestId'), metadata)
+      }
       c.set('mcpAuth', authInfo)
       await next()
     })

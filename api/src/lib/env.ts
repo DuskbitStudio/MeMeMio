@@ -68,6 +68,15 @@ export type Env = {
    *    `PUT /config/image-embed`（它强制先测后存）。
    */
   defaultImageEmbed: ProviderDefaults | null
+  /**
+   * 对外的公开 origin（`https://meme.example.com`，不带末尾 `/`），SPEC §10.10.1。
+   *
+   * OAuth 签名发的每一个绝对 URL（`issuer`、`resource`、各端点、401 里的
+   * `resource_metadata`）都由它派生。为 `null` 时按请求 `Host` + `X-Forwarded-Proto`
+   * 推导——那只服务本机开发；生产不配的后果是客户端拿到一个连不上的
+   * `token_endpoint`，错误离根因很远。
+   */
+  publicOrigin: string | null
 }
 
 export type ParseEnvResult =
@@ -156,6 +165,23 @@ export function parseEnv(source: Record<string, string | undefined>): ParseEnvRe
     errors.push('R2_PUBLIC_BASE_URL 不能以 / 结尾，URL 会拼错（storageKey 本身不带前缀 /）')
   }
 
+  // 可选，但一旦配了就不能是「差一点」：OAuth 的每个绝对 URL 都从它拼，
+  // `http://`（MCP 客户端基本都拒绝）或末尾多一个 `/`（拼出 `//oauth/token`）
+  // 都会让授权流程在客户端那边坏掉，而报错离这里很远。
+  const publicOriginRaw = source['PUBLIC_ORIGIN']?.trim() || null
+  let publicOrigin: string | null = null
+  if (publicOriginRaw !== null) {
+    if (!publicOriginRaw.startsWith('https://')) {
+      errors.push('PUBLIC_ORIGIN 必须以 https:// 开头（MCP 客户端不接受 http 的授权服务器）')
+    } else if (publicOriginRaw.endsWith('/')) {
+      errors.push('PUBLIC_ORIGIN 不能以 / 结尾，各端点路径是拼上去的（会拼出 //oauth/token）')
+    } else if (!isBareOrigin(publicOriginRaw)) {
+      errors.push('PUBLIC_ORIGIN 只能是 origin（形如 https://meme.example.com），不能带路径、查询或 #')
+    } else {
+      publicOrigin = publicOriginRaw
+    }
+  }
+
   const defaultVision = optionalProvider(source, 'DEFAULT_VISION', errors)
   const defaultEmbed = optionalProvider(source, 'DEFAULT_EMBED', errors)
   const defaultImageEmbed = optionalProvider(source, 'DEFAULT_IMAGE_EMBED', errors)
@@ -177,6 +203,7 @@ export function parseEnv(source: Record<string, string | undefined>): ParseEnvRe
       defaultVision,
       defaultEmbed,
       defaultImageEmbed,
+      publicOrigin,
     },
   }
 }
@@ -203,6 +230,17 @@ function optionalProvider(
     return null
   }
   return { baseUrl, apiKey, model }
+}
+
+/** origin 就是 scheme + host + port，别的部分都会让拼出来的端点 URL 出错。 */
+function isBareOrigin(value: string): boolean {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+  return url.origin === value
 }
 
 function isParsablePostgresUrl(value: string): boolean {

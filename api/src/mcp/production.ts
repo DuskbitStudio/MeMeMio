@@ -1,4 +1,5 @@
 import { db } from '../data/db.js'
+import { env } from '../env.js'
 import { log } from '../logger.js'
 import { createMcpApp } from './app.js'
 import { authenticateMcpRequest } from './auth.js'
@@ -22,6 +23,8 @@ const searchCache = createTtlCache<SearchToolResult>()
 export const mcpApp = createMcpApp({
   authenticate: authenticateMcpRequest,
   buildServer: (ctx) => buildMcpServer(ctx, { db, cache: searchCache }),
+  // 401 里的 `resource_metadata` 从它与授权服务器的 issuer 同源派生（SPEC §10.10.1）
+  publicOrigin: env.publicOrigin,
   onHandlerError: (error, requestId) => {
     // SDK 的 onerror 回调没有请求作用域；协议级错误（解析失败、未知工具）可能发生在
     // 路由之前，所以这里允许 requestId 缺失。错误原文只进日志，不进响应

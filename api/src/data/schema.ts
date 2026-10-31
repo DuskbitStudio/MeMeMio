@@ -759,6 +759,15 @@ export const accessTokens = pgTable(
     prefix: text('prefix').notNull(),
     /** `sha256(token)` 十六进制。校验按它查，唯一索引就是那次查询的入口。 */
     tokenHash: text('token_hash').notNull(),
+    /**
+     * 签发方式：`pat`（设置页手动创建）或 `oauth`（授权码流程，SPEC §5.10 / §9.38）。
+     *
+     * **只影响「每人 10 个」的名额与 §6.8 的列表，不影响校验**：两者在 `/mcp` 上
+     * 走同一条链，`findActiveByHash` 不得按它过滤。
+     */
+    kind: text('kind').notNull().default('pat'),
+    /** OAuth 令牌所属的授权（撤销单位）；PAT 为 null（§5.10）。 */
+    grantId: uuid('grant_id').references(() => oauthGrants.id, { onDelete: 'set null' }),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     /** 从未使用为 null。写入必须节流（§5.8：逐请求 UPDATE 是写放大）。 */
     lastUsedAt: timestamptz('last_used_at'),
@@ -772,6 +781,9 @@ export const accessTokens = pgTable(
     uniqueIndex('access_tokens_token_hash_key').on(table.tokenHash),
     // 列表与「每用户最多 10 个有效令牌」的计数
     index('access_tokens_user_id_idx').on(table.userId),
+    // 撤销一条 grant 时要一次性把它的访问令牌全置撤销（§10.10.6）
+    index('access_tokens_grant_id_idx').on(table.grantId),
+    check('access_tokens_kind_check', sql`${table.kind} in ('pat', 'oauth')`),
   ],
 )
 
@@ -797,3 +809,142 @@ export const userMcpSettings = pgTable('user_mcp_settings', {
   excluded: jsonb('excluded').notNull().default(sql`'{}'::jsonb`),
   updatedAt: timestamptz('updated_at').notNull().defaultNow(),
 })
+
+// ── §5.10 OAuth 数据模型 ────────────────────────────────────────────
+
+/**
+ * 动态注册的 OAuth 客户端（RFC 7591，SPEC §10.10.2）。
+ *
+ * 全是公户端：**没有 `client_secret` 列，也不该有**。托管 MCP 客户端没法安全保存
+ * secret，所以鉴权方式固定 `none`，安全性靠 PKCE + 逐字 `redirect_uri` 匹配。
+ *
+ * 注册不产生任何权限——权限只在用户同意之后出现的 `oauth_grants` 里。
+ */
+export const oauthClients = pgTable('oauth_clients', {
+  /** `mmc_` + base64url(32B)。主键即凭证，不需要另一个 uuid 列。 */
+  clientId: text('client_id').primaryKey(),
+  /** 展示用，清洗控制字符后最长 64 字；缺省「未命名应用」。**不做信任判断**。 */
+  clientName: text('client_name').notNull(),
+  /** 注册时已校验：1–10 项、https 或 localhost、无 fragment。授权时逐字匹配。 */
+  redirectUris: jsonb('redirect_uris').$type<string[]>().notNull(),
+  createdAt: timestamptz('created_at').notNull().defaultNow(),
+  lastUsedAt: timestamptz('last_used_at'),
+})
+
+/**
+ * 待同意的授权请求（ticket，SPEC §5.10）。
+ *
+ * `GET /oauth/authorize` 校验通过后不直接发码，而是把这次请求的参数存成一行、把
+ * ticket 明文放进 302 的 `consent?ticket=`。**只存 `sha256`**：URL 会被浏览器历史、
+ * 代理日志、Referer 带走，明文入库等于把它变成第二个授权码。
+ *
+ * 绑定 `user_id`：换一个账号打开同一条链接 → `NOT_FOUND`（§6.10）。
+ */
+export const oauthAuthorizationRequests = pgTable('oauth_authorization_requests', {
+  /** `sha256(ticket)` 十六进制。 */
+  ticketHash: text('ticket_hash').primaryKey(),
+  clientId: text('client_id')
+    .notNull()
+    .references(() => oauthClients.clientId, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  /** PKCE 的 S256 challenge（43 字符 base64url）。 */
+  codeChallenge: text('code_challenge').notNull(),
+  resource: text('resource').notNull(),
+  scope: text('scope').notNull(),
+  /** 原样回传，不做解释。 */
+  state: text('state'),
+  /** 签发 + 10 分钟。 */
+  expiresAt: timestamptz('expires_at').notNull(),
+  createdAt: timestamptz('created_at').notNull().defaultNow(),
+})
+
+/**
+ * 授权（grant）——**OAuth 的撤销单位**（SPEC §10.10.6）。
+ *
+ * 一个用户对同一应用可以有多条 grant（先用后撤销、再授权一次），不做 unique：
+ * 撤销历史是审计信息，靠 `revoked_at` 区分是否仍然有效。
+ *
+ * 上限 20 条**活跃** grant（`revoked_at is null`），与 PAT 的 10 个互不挤压。
+ */
+export const oauthGrants = pgTable(
+  'oauth_grants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => oauthClients.clientId, { onDelete: 'cascade' }),
+    scope: text('scope').notNull(),
+    /** `<origin>/mcp`，发码时钉死（RFC 8707）。 */
+    resource: text('resource').notNull(),
+    /**
+     * 批准时那一条回跳（§5.10），不是 `oauth_clients.redirect_uris[0]`——一个客户端最多
+     * 登记 10 条，取第一条会让列表显示用户没批过的地址。列表只回派生的主机名。
+     */
+    redirectUri: text('redirect_uri').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    lastUsedAt: timestamptz('last_used_at'),
+    /** 非空 = 已撤销；其访问令牌同时被撤销、刷新令牌被删除。 */
+    revokedAt: timestamptz('revoked_at'),
+  },
+  (table) => [
+    // 同意提交时数活跃 grant（上限 20），列表也按它查
+    index('oauth_grants_user_id_revoked_at_idx').on(table.userId, table.revokedAt),
+  ],
+)
+
+/**
+ * 授权码（SPEC §10.10.4）。**只存哈希**，5 分钟过期、单次使用。
+ *
+ * 重放（`used_at` 非空时又来一次）不只是拒绝：**撤销整条 grant**——码泄漏了，
+ * 已经换出去的令牌也不能当作干净。
+ */
+export const oauthAuthorizationCodes = pgTable('oauth_authorization_codes', {
+  /** `sha256(code)` 十六进制。 */
+  codeHash: text('code_hash').primaryKey(),
+  clientId: text('client_id')
+    .notNull()
+    .references(() => oauthClients.clientId, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  grantId: uuid('grant_id')
+    .notNull()
+    .references(() => oauthGrants.id, { onDelete: 'cascade' }),
+  redirectUri: text('redirect_uri').notNull(),
+  codeChallenge: text('code_challenge').notNull(),
+  resource: text('resource').notNull(),
+  /** 签发 + 5 分钟。 */
+  expiresAt: timestamptz('expires_at').notNull(),
+  /** 非空 = 已兑换过，再来一次即重放。 */
+  usedAt: timestamptz('used_at'),
+})
+
+/**
+ * 刷新令牌（SPEC §10.10.5）。**只存哈希**，30 天滑动，每次刷新都旋转。
+ *
+ * `rotated_at` 非空 = 已经换过一次；拿它再来一次是**复用**，怀疑泄漏，
+ * 撤销整条 grant。`replaced_by` 只为审计保留链条，不参与判定。
+ */
+export const oauthRefreshTokens = pgTable(
+  'oauth_refresh_tokens',
+  {
+    /** `sha256(token)` 十六进制。 */
+    tokenHash: text('token_hash').primaryKey(),
+    grantId: uuid('grant_id')
+      .notNull()
+      .references(() => oauthGrants.id, { onDelete: 'cascade' }),
+    expiresAt: timestamptz('expires_at').notNull(),
+    rotatedAt: timestamptz('rotated_at'),
+    replacedBy: text('replaced_by'),
+  },
+  (table) => [
+    // 撤销 grant 时按它删；列表算「最晚到期」也按它聚合
+    index('oauth_refresh_tokens_grant_id_idx').on(table.grantId),
+  ],
+)

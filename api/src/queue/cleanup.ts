@@ -1,4 +1,8 @@
 import {
+  countExpiredOAuthArtifacts,
+  deleteExpiredOAuthArtifacts,
+} from '../data/oauth.js'
+import {
   countExpiredSearchSnapshots,
   deleteExpiredSearchSnapshots,
 } from '../data/search-snapshots.js'
@@ -71,5 +75,23 @@ async function sweep(): Promise<void> {
     await deleteExpiredSearchSnapshots()
   } catch (error) {
     log.error({ err: error }, '清理过期检索快照失败，下轮再试')
+  }
+
+  /*
+   * OAuth 的三类短命产物：待同意的 ticket（10 分钟）、授权码（5 分钟）、刷新令牌
+   * （30 天）。它们在 `data/oauth.ts` 里各有一张表，**过期后多留 1 天才删**
+   * （SPEC §5.10：给「刚过期」的请求留一次可解释的失败，而不是凭空 404）。
+   *
+   * 与上面分开 try：两件互不相关的事，一个失败了不该把另一个也跳过去。
+   * `oauth_grants` 不在清理范围——撤销的 grant 是审计记录，只随用户删除级联。
+   */
+  try {
+    const due = await countExpiredOAuthArtifacts()
+    if (due > 0) {
+      log.info({ due }, '清理过期的 OAuth 临时凭证')
+      await deleteExpiredOAuthArtifacts()
+    }
+  } catch (error) {
+    log.error({ err: error }, '清理过期 OAuth 凭证失败，下轮再试')
   }
 }

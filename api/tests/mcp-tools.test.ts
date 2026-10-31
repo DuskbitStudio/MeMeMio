@@ -79,6 +79,7 @@ function makeMcpApp(): McpToolsApp {
     authenticate: authenticateMcpRequest,
     buildServer: (ctx) => buildMcpServer(ctx, { db, cache: createTtlCache<SearchToolResult>() }),
     onHandlerError: () => {},
+    publicOrigin: null,
   })
 }
 

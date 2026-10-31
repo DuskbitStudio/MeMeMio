@@ -66,6 +66,8 @@ function makeApp(options: {
     authenticate: fakeAuthenticate,
     buildServer: fakeServerFactory(options.order ?? ['search_memes', 'list_vocab']),
     onHandlerError: (error) => handlerErrors.push(error),
+    // 不配 = 按请求推导；用例里的 Host 是 localhost
+    publicOrigin: null,
     limits: options.limits,
   })
   return { app, handlerErrors }
@@ -112,8 +114,12 @@ describe('鉴权与 Origin', () => {
     })
 
     expect(res.status).toBe(401)
-    // SPEC §10.3：realm 带、resource_metadata **不带**（带上会引导客户端去走不存在的 OAuth 发现）
-    expect(res.headers.get('www-authenticate')).toBe('Bearer realm="mememio"')
+    // SPEC §10.3：realm 与 resource_metadata 都带，且是同一个出口（无令牌不特判）
+    expect(res.headers.get('www-authenticate')).toBe(
+      'Bearer realm="mememio", '
+        + 'resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp", '
+        + 'scope="mememio:read"',
+    )
     // 错误响应同样带 requestId，排障时能把响应和日志对上
     expect(res.headers.get('x-request-id')).toMatch(/^[0-9a-f-]{36}$/)
     expect(JSON.stringify(await readRpcBody(res))).not.toContain('resource_metadata')

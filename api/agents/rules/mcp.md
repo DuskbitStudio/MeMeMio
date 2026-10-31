@@ -39,7 +39,20 @@ createMcpHandler(buildServer, {
 
 1. 读 `Authorization`；不是 `Bearer ` 前缀 → 401。
 2. `sha256(token)` → `data/access-tokens.findActiveByHash()`，必须同时满足 `revoked_at is null` 且（`expires_at is null` 或 `> now()`）。
-3. 校验不过一律 **401 + `WWW-Authenticate: Bearer realm="mememio"`**，响应体为空或简短 JSON 均可；**不要带 `resource_metadata`**（SPEC §10.3）。
+3. 校验不过一律 **401 + 同一个挑战头**（SPEC §10.3）：
+
+   ```http
+   WWW-Authenticate: Bearer realm="mememio", resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp", scope="mememio:read"
+   ```
+
+   **只有一个 401 出口**：无令牌、格式错、失效、过期、撤销都是它，不按令牌前缀分流。
+   `resource_metadata` 对 PAT 与 OAuth 访问令牌**统一携带**——挑战发生时系统还不知道
+   这个 Bearer 是什么，而走发现流程的客户端只认头里的这一个入口（[§9.38](../../../spec/09-decisions.md)）。
+   `<origin>` 来自 `createOriginResolver(deps.publicOrigin)`：配了 `PUBLIC_ORIGIN` 就固定用它，
+   否则按 `Host` + `X-Forwarded-Proto` 推导。**`createMcpApp` 不读 env**，origin 由调用方注入，
+   `/mcp` 的挑战与 `/.well-known/*` 的 issuer 必须是同一个 origin，否则客户端拼出的端点不一致。
+
+   挑战头里有 `resource_metadata`，**响应体里不放**：SDK 只读头。
 4. 成功时构造 `AuthInfo`：
 
 ```ts
@@ -111,6 +124,21 @@ createMcpHandler(buildServer, {
 - 列表只回 `prefix`；撤销幂等；不存在/不属于本人都是 404。
 - 上限 10 个有效令牌；`name` 1–64 字；`expiresInDays` 1–3650。
 
+### OAuth 访问令牌与 PAT 共用同一条校验链
+
+OAuth 2.1 授权服务器（SPEC §10.10）签发的访问令牌就是 `access_tokens` 里的一行：
+`kind = 'oauth'`、`grant_id` 指向授权，**校验、限流、工具行为与 PAT 逐字相同**——
+`/mcp` 只有一条鉴权路径，不新增第二个中间件。
+
+| 位置 | 规则 |
+|---|---|
+| `findActiveByHash` | **不加 `kind` 过滤**。加了会把 OAuth 令牌挡在 `/mcp` 外面，而这正是它存在的理由 |
+| `createAccessToken` / `listActiveTokens` | **只算 `kind = 'pat'`**。「最多 10 个」与设置页列表是个人访问令牌的，一次 OAuth 授权不该挤掉 PAT 名额，也不该出现在 PAT 列表里（OAuth 授权有自己的 20 条上限与 `/api/v1/oauth/grants`） |
+| 撤销 | 撤销 grant → 其下所有访问令牌与刷新令牌一并失效；单撤销一个访问令牌不影响 grant |
+
+**凭证不互通**（SPEC §3.1 / §3.3）：OAuth 访问令牌与 PAT 能在 `/mcp` 上用，**都不能**在
+`/api/v1` 上当 cookie 用；`/api/v1/oauth/*` 只认 cookie，Bearer 一律 401。
+
 ## 9. 测试
 
 - `src/lib/token.test.ts`（unit）：格式、前缀、哈希、长度。
@@ -122,4 +150,5 @@ createMcpHandler(buildServer, {
 - `tests/mcp-filter.test.ts`（integration）：`/mcp/filter` 默认/读写/校验；search/pick/random/get 全面过滤；Web 端不受影响；改过滤器后同 query 不命中旧缓存。
 - `src/lib/mcp-filter.test.ts`（unit）：过滤器解析、词表校验、`ratings` 拒绝、脏 JSON 归一化、命中判断、缓存 key 稳定。
 - `src/mcp/query.test.ts`（unit）：词表关键词提取与兜底查询（不依赖数据库）。
-- 集成测试连真 Postgres，**新增表要加进 `tests/helpers/test-db.ts` 的 truncate 清单**（`access_tokens` / `user_mcp_settings`）。
+- `tests/mcp-oauth.test.ts`（integration）：OAuth 2.1 全流程——DCR 校验（fragment / 非 https / 超 10 个 / 错误 auth method）、两种 well-known 形态、401 带 `resource_metadata` 与 `scope`、授权码完整流程、错 verifier 不烧码、码重放撤 grant、刷新旋转与复用检测、20 条 grant 上限、撤销幂等、PAT 不回归。
+- 集成测试连真 Postgres，**新增表要加进 `tests/helpers/test-db.ts` 的 truncate 清单**（`access_tokens` / `user_mcp_settings`，以及 OAuth 的 `oauth_clients` / `oauth_grants` / `oauth_authorization_requests` / `oauth_authorization_codes` / `oauth_refresh_tokens`）。

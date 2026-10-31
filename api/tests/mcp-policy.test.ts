@@ -60,6 +60,7 @@ function makeMcpApp(): ReturnType<typeof createMcpApp> {
     authenticate: authenticateMcpRequest,
     buildServer: (ctx) => buildMcpServer(ctx, { db, cache: createTtlCache<SearchToolResult>() }),
     onHandlerError: () => {},
+    publicOrigin: null,
   })
 }
 

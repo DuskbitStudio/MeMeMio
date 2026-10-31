@@ -9,6 +9,9 @@ import { adminRoutes } from './routes/admin.js'
 import { embedConfigRoutes, imageEmbedConfigRoutes, visionConfigRoutes } from './routes/config.js'
 import { memesRoutes } from './routes/memes.js'
 import { accessTokenRoutes } from './routes/access-tokens.js'
+import { createOAuthRoutes } from './routes/oauth.js'
+import { createOriginResolver } from './oauth/origin.js'
+import { env } from './env.js'
 import { mcpSettingsRoutes } from './routes/mcp-settings.js'
 import { personsRoutes } from './routes/persons.js'
 import { seriesRoutes } from './routes/series.js'
@@ -73,6 +76,10 @@ export const app = new Hono<{ Variables: RequestIdVariables }>()
   // MCP 内容范围设置（SPEC §6.9）。与 `/mcp` 端点无关：这是浏览器 cookie 会话，
   // `/mcp` 仍在 server.ts 分流、只读
   .route('/api/v1/mcp', mcpSettingsRoutes)
+  // OAuth 的浏览器侧端点（SPEC §6.10）。与 `oauth/app.ts` 的协议端点分开挂：
+  // 那一路在 server.ts 按 pathname 分流、认的是协议参数，这一路是普通的
+  // cookie 会话接口。origin 注入同一个解析器，`iss` 与 issuer 才不会分叉
+  .route('/api/v1/oauth', createOAuthRoutes(createOriginResolver(env.publicOrigin)))
   .route('/api/v1/imports', importRoutes)
 
 app.onError(onError)

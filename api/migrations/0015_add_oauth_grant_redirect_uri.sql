@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_grants" ADD COLUMN "redirect_uri" text NOT NULL;

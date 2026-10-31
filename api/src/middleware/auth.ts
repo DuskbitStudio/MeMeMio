@@ -38,6 +38,31 @@ async function resolveUser(c: { req: { raw: Request } }): Promise<AuthUser | nul
 }
 
 /**
+ * 从一个裸 `Request` 读 cookie 会话，返回用户 id；未登录返回 null。
+ *
+ * **唯一的调用方是 OAuth 的 `/oauth/authorize`**（`oauth/app.ts` 的依赖注入）：
+ * 那个端点在 `server.ts` 里分流、不在 `app.ts` 的中间件栈里，拿不到 `c`，
+ * 但它需要知道「现在是谁」才能签发同意 ticket。
+ *
+ * 返回 `string | null` 而不是 `AuthUser`：授权端点只用来**绑定 `user_id`**，
+ * 不做任何权限判断，也就不该拿到角色/配额。用户对象由 `/api/v1/oauth/*` 的
+ * `requireAuth` 各自取。
+ *
+ * ⚠️ 它**不是 `optionalAuth`**。下面那段警告依然成立：这里没有「登录与否都放行」
+ *    的语义，调用方必须显式分支（未登录 → 302 去登录页），不存在 `?? 匿名` 的写法。
+ */
+export async function resolveSessionUserId(request: Request): Promise<string | null> {
+  const sessionId = getCookie({ req: { raw: request } } as never, SESSION_COOKIE)
+  if (!sessionId) return null
+
+  const session = await findValidSession(sessionId)
+  if (!session) return null
+
+  const user = await findUserById(session.userId)
+  return user?.id ?? null
+}
+
+/**
  * 要求已登录，未登录抛 UNAUTHENTICATED。
  *
  * ⚠️ **这个文件里没有 `optionalAuth`，是刻意删掉的。** 读路径（浏览、搜索）曾经挂它，

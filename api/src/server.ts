@@ -5,6 +5,7 @@ import { checkMigrations } from './data/migration-state.js'
 import { env } from './env.js'
 import { log } from './logger.js'
 import { mcpApp } from './mcp/production.js'
+import { oauthApp, publicOrigin } from './oauth/production.js'
 import { assertRuntimeFilesPresent, WEB_DIST_DIR } from './paths.js'
 import { startCleanupJob, stopCleanupJob } from './queue/cleanup.js'
 import { startPersonVectorWorker, stopPersonVectorWorker } from './queue/person-vector-worker.js'
@@ -81,6 +82,12 @@ async function main(): Promise<void> {
   const server = serve({ fetch: dispatchHttpRequest, port: env.port }, (info) => {
     log.info({ port: info.port, nodeEnv: env.nodeEnv }, 'HTTP 已启动')
     log.info({ path: '/mcp' }, 'MCP 端点已挂载（POST /mcp，Authorization: Bearer）')
+    if (publicOrigin === null) {
+      // 不是错误，但它是「部署上线后其中一个必错项」：客户端拿到的 issuer 会跟着请求头走
+      log.warn({}, '未配置 PUBLIC_ORIGIN：OAuth 的 issuer / 端点按请求 Host 推导，只适合本地开发')
+    } else {
+      log.info({ issuer: publicOrigin }, 'OAuth 授权服务器已挂载（/.well-known/*、/oauth/*）')
+    }
   })
 
   // worker 在 HTTP 之后起：迁移检查已经过了，且它不影响接口可用性。
@@ -124,7 +131,21 @@ async function main(): Promise<void> {
 }
 
 /**
- * `serve()` 的入口分流：`/mcp` 与 `/api/v1` **并列**，两套中间件栈互不影响。
+ * OAuth 协议端点的路径集合。**逐个写死，不做前缀匹配。**
+ *
+ * `/oauth/token` 之类是固定路径；只有一个例外要按前缀：`/oauth/authorize` 不带参数时
+ * 也是同一个端点（GET 带查询串）。`/.well-known/` 是整个命名空间——那下面不该有
+ * 静态文件，多出来的路径由 `oauthApp.notFound` 回 JSON 404，绝不能落到 SPA 回退上
+ * （客户端会拿到 `index.html` 并把它当成一个有 HTML 的 discovery 文档）。
+ */
+const OAUTH_PROTOCOL_PATHS = new Set(['/oauth/register', '/oauth/authorize', '/oauth/token', '/oauth/revoke'])
+
+function isOAuthProtocolPath(pathname: string): boolean {
+  return pathname.startsWith('/.well-known/') || OAUTH_PROTOCOL_PATHS.has(pathname)
+}
+
+/**
+ * `serve()` 的入口分流：`/mcp`、OAuth 协议端点与 `/api/v1` **并列**，几套中间件栈互不影响。
  *
  * 为什么在这里分而不是把 MCP 挂进 `app.ts`：`web` 通过 `AppType` 消费 api 的类型，
  * `app.ts` 的 import 图会整个进入 web 的 typecheck，而 MCP SDK 带 Node 类型与自己的一套
@@ -135,7 +156,12 @@ async function main(): Promise<void> {
  * 落到 `app.fetch`，由它回 404 —— 不做「宽容匹配」：多一个能进来的路径就多一份要维护的行为。
  */
 function dispatchHttpRequest(request: Request): Response | Promise<Response> {
-  if (new URL(request.url).pathname === '/mcp') return mcpApp.fetch(request)
+  const { pathname } = new URL(request.url)
+  // **精确等于** `/mcp`：`/mcp/` 与 `/mcp/x` 落到 app.fetch 回 404（SPEC §10.2）
+  if (pathname === '/mcp') return mcpApp.fetch(request)
+  // 必须先于 `app.fetch`：app 上挂了 `mountWebDist` 的 SPA 回退（任何未命中路径都回
+  // index.html），而 OAuth 客户端解析不了 HTML。注册顺序在这里就决定了正确性
+  if (isOAuthProtocolPath(pathname)) return oauthApp.fetch(request)
   return app.fetch(request)
 }
 

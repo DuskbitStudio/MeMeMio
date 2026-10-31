@@ -10,7 +10,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
  * 这里用**真实的** `authenticateMcpRequest` + `buildMcpServer`（不是桩）：
  * 令牌校验要测的正是「哈希查库 + 有效条件 + AuthInfo 构造」这一整段。
  *
- * ⚠️ 本机没有 Docker/Postgres，这个文件**写了但没跑**（任务交接时如实说明）。
+ * 2026-10-31 实测：连本机 Postgres 全过（`npm test`，68 文件 / 818 用例）。
  */
 const { requireDatabaseUrl, testDatabaseUrl } = await import('./helpers/db-url.js')
 
@@ -85,6 +85,8 @@ function makeMcpApp(limits?: { allPerMinute?: number; searchPerMinute?: number }
     authenticate: authenticateMcpRequest,
     buildServer: (ctx) => buildMcpServer(ctx, { db, cache: createTtlCache() }),
     onHandlerError: (error) => handlerErrors.push(error),
+    // 不配 = 按请求推导；用例里的 Host 是 localhost
+    publicOrigin: null,
     ...(limits !== undefined ? { limits } : {}),
   })
   return { app, handlerErrors }
@@ -121,13 +123,21 @@ async function readRpcBody(response: Response): Promise<Record<string, unknown>>
 const TOOLS_LIST = { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }
 
 describe('401：缺失 / 格式错 / 不存在 / 撤销 / 过期，一律同一个结果', () => {
-  it('没有任何 Authorization 是 401，带 realm、不带 resource_metadata', async () => {
+  it('没有任何 Authorization 是 401，带 realm、resource_metadata 与 scope', async () => {
     const { app } = makeMcpApp()
     const res = await rpc(app, TOOLS_LIST)
 
     expect(res.status).toBe(401)
-    expect(res.headers.get('www-authenticate')).toBe('Bearer realm="mememio"')
+    // SPEC §10.3：`resource_metadata` **对所有 401 统一携带**（无令牌与 PAT 无效同一条出口），
+    // 否则走 OAuth 发现流程的客户端找不到授权服务器。`publicOrigin: null` 时按请求推导，
+    // 用例里是 localhost。
+    expect(res.headers.get('www-authenticate')).toBe(
+      'Bearer realm="mememio", '
+        + 'resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp", '
+        + 'scope="mememio:read"',
+    )
     const raw = JSON.stringify(await readRpcBody(res))
+    // 挑战头里有，**响应体里没有**：SDK 客户端只读头
     expect(raw).not.toContain('resource_metadata')
   })
 
