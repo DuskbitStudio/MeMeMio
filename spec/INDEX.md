@@ -11,7 +11,7 @@
 | 2 | [02-errors.md](02-errors.md) | 错误结构、错误码与消费行为 |
 | 3 | [03-auth-permission.md](03-auth-permission.md) | 会话、角色、权限矩阵与软删边界 |
 | 4 | [04-vocabulary.md](04-vocabulary.md) | 固定标签词表的规则与变更流程 |
-| 5 | [05-data-models.md](05-data-models.md) | User、Meme、Favorite、AI 配置、导入批次、运行参数、人物与系列 |
+| 5 | [05-data-models.md](05-data-models.md) | User、Meme、Favorite、AI 配置、导入批次、运行参数、人物与系列、MCP 令牌与调用日志 |
 | 6 | [06-endpoints.md](06-endpoints.md) | 业务 API 及输入输出 |
 | 7 | [07-naming.md](07-naming.md) | 通信、数据库与代码命名 |
 | 8 | [08-collaboration.md](08-collaboration.md) | 契约变更、任务与归档 |
@@ -34,5 +34,6 @@
 | 人物与系列 | §3.3、§3.4、§5.7、§6.3.2、§6.7、§9.6、§9.34 |
 | MCP 接入与访问令牌 | §10、§3.1、§5.8、§5.9、§6.8、§6.9、§9.35、§9.36、§9.37 |
 | MCP OAuth 2.1 授权 | §10.10、§3.1、§3.3、§5.10、§6.10、§9.38；令牌与设置的已有语义读 §5.8、§5.9 |
+| MCP 调用审计与令牌日预算 | §10.11、§5.11、§6.11、§3.3、§9.39；令牌与限流的已有语义读 §5.8、§10.3、§10.6 |
 
 引用使用文件名与稳定章节号。本文只作路由，不能只看关键词表推断契约细节。

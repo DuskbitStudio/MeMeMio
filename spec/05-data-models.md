@@ -487,3 +487,29 @@ oauth_refresh_tokens(
 - **`access_tokens.grant_id` 是单一外键**（[§5.8](05-data-models.md#58-访问令牌)），`on delete set null` 而非 cascade：grant 物理删除时令牌行保留为已撤销状态，审计语义与 PAT 一致。实际路径上 grant 只软删（`revoked_at`），cascade 用于清库。
 - **清理**：过期超过 1 天的 `oauth_authorization_requests` / `oauth_authorization_codes` / `oauth_refresh_tokens` 由定时任务（或惰性删除）清掉；`oauth_grants` 不自动删，除非所属用户被删。
 - 新表全部进 `api/tests/helpers/test-db.ts` 的 truncate 清单。
+
+## §5.11 MCP 调用日志
+
+> **状态：`proposed`**（2026-10-31，回应 [issue #6](https://github.com/DuskbitStudio/MeMeMio/issues/6)；产品负责人当日拍板七项）。契约已定、未实现。审计与日预算的行为见 [§10.11](10-mcp.md#1011-调用审计与令牌日预算)，查询端点见 [§6.11](06-endpoints.md#611-mcp-调用日志)。
+
+```sql
+mcp_call_logs(
+  id            bigserial primary key,
+  user_id       uuid not null references users(id) on delete cascade,
+  token_id      uuid references access_tokens(id) on delete set null, -- 用哪个令牌调的；令牌行物理删除后为 null
+  budget_key    text not null,      -- 计日预算的键：PAT = token_id；OAuth = grant_id
+  tool          text not null,      -- tools/call 的工具名
+  query_text    text,               -- 检索原文；只有 search_memes / pick_meme_for_reply 有
+  outcome       text not null,      -- 'ok' | 'error'
+  created_at    timestamptz not null default now()
+);
+
+create index mcp_call_logs_user_time_idx on mcp_call_logs (user_id, created_at desc);
+create index mcp_call_logs_budget_time_idx on mcp_call_logs (budget_key, created_at);
+```
+
+- **不存任何令牌值**——只存 `token_id`，日志纪律与 [§10.3](10-mcp.md#103-鉴权与访问令牌) 相同。
+- **`budget_key` 是文本，不设外键**：PAT 用 `token_id`，OAuth 令牌用 `grant_id`。OAuth 访问令牌每小时刷新换一行，按行计预算会每小时清零；grant 在刷新之间不变，见 [§10.11](10-mcp.md#1011-调用审计与令牌日预算)。令牌行被物理删除后，`budget_key` 仍留在字符串里，历史计数不受影响（那些行也已经在清理窗口内）。
+- **`query_text` 是唯一的用户输入原文列**，读出规则见 [§6.11](06-endpoints.md#611-mcp-调用日志)：**本人可见，他人（含 `admin`）返回 `null`**。不是列级加密，靠查询层约束；这条规则要有专门测试。
+- **保留 90 天**，由 `api/src/queue/cleanup.ts` 的周期扫描删除（[queue.md §6](../api/agents/rules/queue.md)），不新起 `setInterval`。
+- 新表进 `api/tests/helpers/test-db.ts` 的 truncate 清单。

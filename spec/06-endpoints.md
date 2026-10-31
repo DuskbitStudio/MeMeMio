@@ -911,3 +911,60 @@ GET /persons?q=塞西&series=none&named=true&minCount=2&cursor=…&limit=40
 | `VALIDATION_FAILED` | `decision` 不合法；或 approve 时已达 20 条授权上限 |
 | `NOT_FOUND` | ticket / grant 不存在、过期、已用、不属于本人 |
 | `FORBIDDEN` | 跨站提交（`Origin` / `Sec-Fetch-Site` 不同源） |
+
+## §6.11 MCP 调用日志
+
+> **状态：`proposed`**（2026-10-31，issue #6）。[§10.11](10-mcp.md#1011-调用审计与令牌日预算) 的读取面，纯新增。要求 cookie 会话（[§3.1](03-auth-permission.md#31-会话)），不接受 Bearer——日志是给人在浏览器里看的，MCP 客户端不读它。
+
+| 方法 | 路径 | 权限 |
+|---|---|---|
+| GET | `/mcp/logs` | 本人；`admin` 可带 `scope=all` |
+
+```
+GET /api/v1/mcp/logs?scope=mine&tool=search_memes&tokenId=…&from=2026-10-01&to=2026-10-31&limit=40&cursor=…
+```
+
+```
+{
+  scope: "mine",
+  items: [
+    {
+      id: "1841",
+      userId: "2f7c…",                // 恒有；scope=mine 时等于调用者
+      createdAt: "2026-10-31T08:12:33.000Z",
+      tool: "search_memes",
+      tokenId: "0f3c…",
+      tokenName: "我的 Claude",
+      tokenPrefix: "mcp_a1b2c3d4e",
+      queryText: "想找一个笑的表情",   // 他人的行恒为 null
+      outcome: "ok"
+    }
+  ],
+  nextCursor: null
+}
+```
+
+| 参数 | 规则 |
+|---|---|
+| `scope` | 缺省 `mine`；`all` 仅 `admin`，其它角色 → `FORBIDDEN`（与 [§6.6.1](#661-汇总) 同口径） |
+| `tool` | 可选，工具名；不在工具全集里 → `VALIDATION_FAILED` |
+| `tokenId` | 可选，UUID。**`scope=mine` 时只能筛自己的令牌**，别人的 id → `NOT_FOUND`；`scope=all` 不限 |
+| `from` / `to` | 可选，`YYYY-MM-DD`（UTC 日，含两端）。`from > to` → `VALIDATION_FAILED` |
+| `limit` / `cursor` | 游标分页，[§1.3](01-http.md#13-分页)：默认 40，最大 100 |
+
+**按 `createdAt` 倒序。** 游标要与筛选条件一起签名——换了筛选还拿旧游标 → `VALIDATION_FAILED`（[§2.2](02-errors.md#22-通用错误码)）。
+
+**`queryText` 的隐私规则。** 只有 `scope=mine` 下的行、以及 `scope=all` 中 `userId` 等于调用者本人的行，才返回原文；**其余行一律 `null`**，管理员也不例外。客户端对 `null` 显示「仅本人可见」，不得从别的字段反推。
+
+**`tokenName` / `tokenPrefix` 是展示用身份**，不是密钥：`prefix` 本来就出现在本人的令牌列表里（[§6.8](#68-访问令牌)）。令牌行已物理删除时 `tokenId` 为 `null`，`tokenName` 回 `null`，客户端显示「已删除的令牌」。
+
+**`userId` 恒在，两种 `scope` 形状相同。** 它是本响应里唯一的用户字段——`scope=all` 也不带邮箱、昵称或任何其它资料，管理页拿它去用户列表里对；日志表不另存一份可变的用户副本。`scope=mine` 时它恒等于调用者，冗余但**不省略**：客户端靠它判断 `scope=all` 下哪一行是自己（只有自己的行带 `queryText`），按 scope 分两种形状会让消费方多一个分支。
+
+错误码：
+
+| 码 | 何时 |
+|---|---|
+| `UNAUTHENTICATED` | 没有有效 cookie 会话 |
+| `FORBIDDEN` | 非 `admin` 传 `scope=all` |
+| `VALIDATION_FAILED` | 参数不合法、工具名不在全集、游标与筛选不匹配 |
+| `NOT_FOUND` | `scope=mine` 下筛了不属于自己的 `tokenId` |
