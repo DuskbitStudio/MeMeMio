@@ -982,6 +982,11 @@ export const mcpCallLogs = pgTable(
     tool: text('tool').notNull(),
     /** 检索原文；只有 `search_memes` / `pick_meme_for_reply` 有。 */
     queryText: text('query_text'),
+    /**
+     * 这次返回了哪些图，按工具输出顺序、去重、最多 20 条（§10.11）。没有图、
+     * 失败的调用、抽取失败都是空数组。**不设外键、不存快照**：图软删后 id 仍在。
+     */
+    resultMemeIds: uuid('result_meme_ids').array().notNull().default(sql`'{}'::uuid[]`),
     /** `'ok' | 'error'`。工具返回 `isError` 也算 error。 */
     outcome: text('outcome').notNull(),
     createdAt: timestamptz('created_at').notNull().defaultNow(),

@@ -1,4 +1,5 @@
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
+import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import { db as defaultDb, type Db } from './db.js'
 import { accessTokens, mcpCallLogs } from './schema.js'
 import { AppError } from '../lib/app-error.js'
@@ -30,6 +31,11 @@ export type NewMcpCallLog = {
   tool: string
   /** 检索原文；只有 `search_memes` / `pick_meme_for_reply` 有。 */
   queryText: string | null
+  /**
+   * 这次返回了哪些图（§10.11）：按工具输出的顺序、去重、最多 20 条。
+   * 没有图 / 失败 / 抽取不出来都是 `[]`——**永远不是 `null`**，`null` 只属于读出口的他人行。
+   */
+  resultMemeIds: string[]
   outcome: McpCallOutcome
 }
 
@@ -67,6 +73,13 @@ export type McpCallLogItem = {
   tokenPrefix: string | null
   /** 他人的行恒为 null，管理员也不例外。 */
   queryText: string | null
+  /**
+   * 这次返回了几张图（§6.11）。由数组长度算出，**两种 `scope` 都返回**——
+   * 数量不透露内容。恒等于本人行 `resultMemeIds` 的长度，但两者不能互相替代。
+   */
+  resultCount: number
+  /** 他人的行恒为 null，管理员也不例外。 */
+  resultMemeIds: string[] | null
   outcome: string
 }
 
@@ -114,9 +127,13 @@ export async function countMcpCallsToday(
  * 这是整个文件里最不能「顺手简化」的一行。写成 `select: { queryText: mcpCallLogs.queryText }`
  * 再在路由里按 `userId` 抹成 null，功能上看起来一样，实际上把「不返回」变成了
  * 「返回了但不显示」——多一条读路径、多一次序列化改造、多一个会漏的地方。
+ *
+ * `result_meme_ids` 与它共用这一条规则、也共用这一个表达式（`ownerOnly`）：返回的 id
+ * 等于「这个人当时拿到了哪些图」，泄露的是检索意图本身，比原文更直接。**条数不在此列**
+ * ——`resultCount` 用另一条独立表达式恒返回，两者不能互相替代。
  */
-function privacyQueryText(callerId: string) {
-  return sql<string | null>`case when ${mcpCallLogs.userId} = ${callerId}::uuid then ${mcpCallLogs.queryText} end`
+function ownerOnly<T>(callerId: string, column: AnyPgColumn): SQL<T> {
+  return sql<T>`case when ${mcpCallLogs.userId} = ${callerId}::uuid then ${column} end`
 }
 
 const CURSOR_VERSION = 1
@@ -229,7 +246,11 @@ export async function listMcpCallLogs(
       // §6.11：令牌行已物理删除时 token_id 为 null，名字与前缀跟着为 null
       tokenName: accessTokens.name,
       tokenPrefix: accessTokens.prefix,
-      queryText: privacyQueryText(params.callerId),
+      queryText: ownerOnly<string | null>(params.callerId, mcpCallLogs.queryText),
+      // §6.11：条数恒返回（数量不透露内容），由数组长度算——不另存一列
+      resultCount: sql<number>`coalesce(cardinality(${mcpCallLogs.resultMemeIds}), 0)::int`,
+      // §6.11：id 只对本人可见，与原文同一个 case
+      resultMemeIds: ownerOnly<string[] | null>(params.callerId, mcpCallLogs.resultMemeIds),
       outcome: mcpCallLogs.outcome,
     })
     .from(mcpCallLogs)
@@ -256,6 +277,8 @@ export async function listMcpCallLogs(
       tokenName: row.tokenName,
       tokenPrefix: row.tokenPrefix,
       queryText: row.queryText,
+      resultCount: row.resultCount,
+      resultMemeIds: row.resultMemeIds,
       outcome: row.outcome,
     })),
     nextCursor,

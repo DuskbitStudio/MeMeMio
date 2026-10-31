@@ -4,8 +4,9 @@ import { Hono } from 'hono'
 /**
  * MCP 调用审计与令牌日预算（SPEC §10.11 / §5.11 / §6.11）的真库集成测试。
  *
- * 覆盖任务文件 `joint-tasks/2026-10-31-mcp-audit.md` 的 api 端清单：
- * 每次 `tools/call` 写一行；原文只对本人可见；管理员看得到别人的行但拿不到原文；
+ * 覆盖任务 `2026-10-31-mcp-audit-result` 的 api 端清单：
+ * 每次 `tools/call` 写一行；原文与返回的图 id 只对本人可见，管理员看得到别人的行但拿不到；
+ * 返回条数两种 scope 都返回；五个工具各按 `structuredContent` 抽 id；抽取失败记空数组；
  * 非管理员 `scope=all` → 403；跨用户 `tokenId` → 404；超日预算 → 429 且次日恢复；
  * OAuth 刷新不重置预算；令牌值不进表；写日志失败不拦请求；清理只删 90 天前的行。
  *
@@ -39,7 +40,7 @@ const { requestId } = await import('../src/middleware/request-id.js')
 const { mcpLogRoutes } = await import('../src/routes/mcp-logs.js')
 const { createMcpApp } = await import('../src/mcp/app.js')
 const { authenticateMcpRequest, resetTokenTouchThrottle } = await import('../src/mcp/auth.js')
-const { buildMcpServer } = await import('../src/mcp/server.js')
+const { buildMcpServer, resultMemeIdsOf, withAudit } = await import('../src/mcp/server.js')
 const { createTtlCache } = await import('../src/mcp/cache.js')
 const { generateToken, hashToken, prefixOf } = await import('../src/lib/token.js')
 const { accessTokens, mcpCallLogs, oauthClients, oauthGrants } = await import('../src/data/schema.js')
@@ -166,7 +167,11 @@ async function sessionCookie(userId: string): Promise<string> {
   return `sid=${session.id}`
 }
 
-type ToolResult = { isError?: boolean; content?: { type: string; text?: string }[] }
+type ToolResult = {
+  isError?: boolean
+  content?: { type: string; text?: string }[]
+  structuredContent?: unknown
+}
 
 async function readRpcBody(response: Response): Promise<Record<string, unknown>> {
   const text = await response.text()
@@ -213,6 +218,10 @@ type LogItem = {
   tokenName: string | null
   tokenPrefix: string | null
   queryText: string | null
+  /** 恒有：两种 `scope` 都给（§6.11）。 */
+  resultCount: number
+  /** 他人的行恒为 null。 */
+  resultMemeIds: string[] | null
   outcome: string
 }
 
@@ -309,6 +318,164 @@ describe('审计写路径', () => {
   })
 })
 
+// ── 结果侧：返回了哪些图 ──────────────────────────────────────────
+
+describe('结果侧：result_meme_ids', () => {
+  it('search_memes / random_meme 记 items[].id；顺序照输出、去重、截断在 20', async () => {
+    const user = await createUser(db)
+    const { token } = await issueToken(user.id)
+    const { app } = makeMcpApp()
+
+    const first = await makeMeme(db, { uploaderId: user.id, ocrText: '猫在键盘上睡觉' })
+    const second = await makeMeme(db, { uploaderId: user.id, description: '猫在键盘上睡觉的连拍' })
+    await makeMeme(db, { uploaderId: user.id, ocrText: '一只狗在草地上奔跑' })
+
+    const searched = await callTool(app, token, 'search_memes', { query: '猫在键盘上睡觉' })
+    const structuredItems = (searched.result?.structuredContent as { items: { id: string }[] }).items
+    expect(structuredItems.length).toBeGreaterThanOrEqual(2)
+
+    const rows = await db.select().from(mcpCallLogs)
+    expect(rows).toHaveLength(1)
+    // 与工具响应里的 items 一一对上——不是「有几条」而已
+    expect(rows[0]?.resultMemeIds).toEqual(structuredItems.map((item) => item.id))
+    expect(rows[0]!.resultMemeIds).toHaveLength(structuredItems.length)
+    expect(rows[0]?.resultMemeIds).toEqual(expect.arrayContaining([first.id, second.id]))
+  })
+
+  it('get_meme_image 记 1 张（裸图取顶层 id）；list_vocab 恒空', async () => {
+    const user = await createUser(db)
+    const { token } = await issueToken(user.id)
+    const { app } = makeMcpApp()
+
+    const meme = await makeMeme(db, { uploaderId: user.id })
+    const image = await callTool(app, token, 'get_meme_image', { memeId: meme.id })
+    expect(image.result?.isError).not.toBe(true)
+
+    const vocab = await callTool(app, token, 'list_vocab')
+    expect(vocab.result?.isError).not.toBe(true)
+
+    const rows = await db.select().from(mcpCallLogs).orderBy(mcpCallLogs.id)
+    expect(rows[0]).toMatchObject({ tool: 'get_meme_image', outcome: 'ok', resultMemeIds: [meme.id] })
+    expect(rows[1]).toMatchObject({ tool: 'list_vocab', outcome: 'ok', resultMemeIds: [] })
+  })
+
+  it('pick_meme_for_reply 记 chosen + alternatives；chosen 为 null 时记空数组', async () => {
+    const user = await createUser(db)
+    const { token } = await issueToken(user.id)
+    const { app } = makeMcpApp()
+
+    // 空库：命中为空、随机兜底也挑不到，结果就是 chosen = null
+    const picked = await callTool(app, token, 'pick_meme_for_reply', { message: '被夸了有点得意' })
+    expect(picked.result?.isError).not.toBe(true)
+    expect((picked.result?.structuredContent as { chosen: unknown }).chosen).toBeNull()
+
+    const rows = await db.select().from(mcpCallLogs)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ tool: 'pick_meme_for_reply', outcome: 'ok', resultMemeIds: [] })
+  })
+
+  it('失败调用记空数组，`outcome` 是 error', async () => {
+    const user = await createUser(db)
+    const { token } = await issueToken(user.id)
+    const { app } = makeMcpApp()
+
+    const failed = await callTool(app, token, 'get_meme_image', {
+      memeId: '00000000-0000-4000-8000-000000000000',
+    })
+    expect(failed.result?.isError).toBe(true)
+
+    const rows = await db.select().from(mcpCallLogs)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ tool: 'get_meme_image', outcome: 'error', resultMemeIds: [] })
+  })
+
+  it('抽取按工具分派：裸图 / items / chosen + alternatives / 空 / 形状不对', () => {
+    const a = '11111111-1111-4111-8111-111111111111'
+    const b = '22222222-2222-4222-8222-222222222222'
+
+    // search_memes / random_meme：items[].id
+    expect(resultMemeIdsOf('search_memes', { structuredContent: { items: [{ id: a }, { id: b }] } })).toEqual([a, b])
+    expect(resultMemeIdsOf('random_meme', { structuredContent: { items: [{ id: a }] } })).toEqual([a])
+
+    // get_meme_image：裸的一张图，取顶层 id，不是 items
+    expect(resultMemeIdsOf('get_meme_image', { structuredContent: { id: a } })).toEqual([a])
+    expect(resultMemeIdsOf('get_meme_image', { structuredContent: { items: [{ id: a }] } })).toBeNull()
+
+    // pick：chosen + alternatives；chosen=null 只剩 alternatives
+    expect(resultMemeIdsOf('pick_meme_for_reply', {
+      structuredContent: { chosen: { id: a }, alternatives: [{ id: b }] },
+    })).toEqual([a, b])
+    expect(resultMemeIdsOf('pick_meme_for_reply', {
+      structuredContent: { chosen: null, alternatives: [{ id: b }] },
+    })).toEqual([b])
+
+    // list_vocab：不返回图，恒空——连 structuredContent 都不看
+    expect(resultMemeIdsOf('list_vocab', { structuredContent: { dimensions: {} } })).toEqual([])
+    expect(resultMemeIdsOf('list_vocab', undefined)).toEqual([])
+
+    // isError：没有 structuredContent，记空数组，不是「抽取失败」
+    expect(resultMemeIdsOf('get_meme_image', { isError: true })).toEqual([])
+
+    // 形状不对 → null（调用方记空数组 + warn）
+    expect(resultMemeIdsOf('search_memes', { structuredContent: { items: '不是数组' } })).toBeNull()
+    expect(resultMemeIdsOf('search_memes', { structuredContent: { items: [{ id: 42 }] } })).toBeNull()
+    expect(resultMemeIdsOf('search_memes', {})).toBeNull()
+    expect(resultMemeIdsOf('search_memes', undefined)).toBeNull()
+
+    // 顺序照输出、去重不排序、截断在 20
+    expect(resultMemeIdsOf('search_memes', { structuredContent: { items: [{ id: b }, { id: a }, { id: b }] } }))
+      .toEqual([b, a])
+    const many = Array.from({ length: 25 }, (_, i) => ({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}` }))
+    expect(resultMemeIdsOf('search_memes', { structuredContent: { items: many } })).toHaveLength(20)
+  })
+
+  it('抽取失败不影响工具返回：记空数组，结果原样交给客户端', async () => {
+    const written: { tool: string; resultMemeIds: string[] }[] = []
+    // 桩 McpServer：只留 `registerTool`，把包装后的回调捞出来直接调
+    const registered: { name: string; callback: (...args: unknown[]) => Promise<unknown> }[] = []
+    const stub = {
+      registerTool: (name: string, _config: unknown, cb: (...args: unknown[]) => Promise<unknown>) => {
+        registered.push({ name, callback: cb })
+        return { name }
+      },
+    }
+
+    withAudit(
+      stub as unknown as Parameters<typeof withAudit>[0],
+      { userId: 'user-1', tokenId: 'token-1', budgetKey: 'token-1' },
+      'request-1',
+      {
+        write: async (entry) => { written.push({ tool: entry.tool, resultMemeIds: entry.resultMemeIds }) },
+        onError: () => {},
+      },
+    )
+
+    stub.registerTool('search_memes', {}, async () => '不是对象')
+    const broken = { content: [{ type: 'text', text: 'x' }], structuredContent: { items: [{ noId: true }] } }
+    stub.registerTool('search_memes', {}, async () => broken)
+    stub.registerTool('get_meme_image', {}, async () => { throw new Error('工具炸了') })
+
+    expect(registered).toHaveLength(3)
+
+    // ① 返回值不是对象 → 抽取失败，记空数组，结果原样返回
+    const plain = await registered[0]!.callback({ query: 'x', limit: 3 })
+    expect(plain).toBe('不是对象')
+
+    // ② structuredContent 形状不对 → 同上
+    const withBadShape = await registered[1]!.callback({ query: 'x', limit: 3 })
+    expect(withBadShape).toBe(broken)
+
+    // ③ 工具抛异常：仍然记一条 error，空数组，异常照样上抛
+    await expect(registered[2]!.callback({ memeId: 'x' })).rejects.toThrow('工具炸了')
+
+    expect(written).toEqual([
+      { tool: 'search_memes', resultMemeIds: [] },
+      { tool: 'search_memes', resultMemeIds: [] },
+      { tool: 'get_meme_image', resultMemeIds: [] },
+    ])
+  })
+})
+
 // ── 读路径 ─────────────────────────────────────────────────────────
 
 describe('GET /api/v1/mcp/logs', () => {
@@ -319,7 +486,7 @@ describe('GET /api/v1/mcp/logs', () => {
     const adminToken = await issueToken(admin.id)
     const { app } = makeMcpApp()
 
-    await makeMeme(db, { uploaderId: alice.id })
+    await makeMeme(db, { uploaderId: alice.id, ocrText: 'Alice 的私房话' })
     await callTool(app, aliceToken.token, 'search_memes', { query: 'Alice 的私房话' })
     await callTool(app, adminToken.token, 'search_memes', { query: '管理员自己的查询' })
 
@@ -342,6 +509,16 @@ describe('GET /api/v1/mcp/logs', () => {
     const adminRow = allItems.find((row) => row.userId === admin.id)
     expect(aliceRow?.queryText).toBeNull()
     expect(adminRow?.queryText).toBe('管理员自己的查询')
+
+    // 返回的图 id 跟原文同一条规则；**条数不跟**——他人行有数无 id（§6.11）
+    expect(aliceRow?.resultMemeIds).toBeNull()
+    expect(adminRow?.resultMemeIds).not.toBeNull()
+    expect(aliceRow?.resultCount).toBeGreaterThan(0)
+    expect(adminRow?.resultCount).toBe(adminRow?.resultMemeIds?.length)
+
+    // 本人的行两者都有，长度一致
+    expect(aliceItems[0]?.resultCount).toBe(aliceItems[0]?.resultMemeIds?.length)
+    expect(aliceItems[0]?.resultMemeIds).not.toBeNull()
   })
 
   it('非管理员 `scope=all` → FORBIDDEN；`scope=foo` → VALIDATION_FAILED', async () => {

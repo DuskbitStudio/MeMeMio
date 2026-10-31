@@ -1,6 +1,7 @@
 import { McpServer, type McpRequestContext, type RegisteredTool } from '@modelcontextprotocol/server'
 import type { Db } from '../data/db.js'
 import type { NewMcpCallLog } from '../data/mcp-call-logs.js'
+import { log } from '../logger.js'
 import { mcpRequestIdOf } from './app.js'
 import { actorOf } from './auth.js'
 import type { TtlCache } from './cache.js'
@@ -73,6 +74,92 @@ function queryTextOf(tool: string, args: unknown): string | null {
 }
 
 /**
+ * 返回 id 的条数上限：单次工具返回本来就 ≤ 20（§10.4），超出说明上游行为变了。
+ * 截断 + warn 比让一行日志无界增长好（§10.11）。
+ */
+const MAX_RESULT_MEME_IDS = 20
+
+/** 从数组里挑出 `id` 是字符串的对象；形状不对就返回 null（交给调用方记空数组 + warn）。 */
+function idsOf(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  const ids: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) return null
+    const id = (item as Record<string, unknown>)['id']
+    if (typeof id !== 'string') return null
+    ids.push(id)
+  }
+  return ids
+}
+
+/**
+ * 从工具结果的 `structuredContent` 抽「这次返回了哪些图」（§10.11）。
+ *
+ * **只读 `structuredContent`，不解析 text。** text 的 `detail` 有 compact / full 两档
+ * （§10.4.6），按 text 取会在 compact 时静默少字段；`structuredContent` 永远完整。
+ *
+ * 返回 `null` 表示**形状不符合预期**（字段缺失、上游改了返回结构），由调用方记空数组并 warn；
+ * 返回 `[]` 是「确实没有图」或「失败调用」——两者在日志里是同一条事实，不必区分。
+ *
+ * 各工具的取法不同，这正是不能写一个通用 `items[].id` 的原因：
+ * - `search_memes` / `random_meme`：`items[].id`；
+ * - `pick_meme_for_reply`：`chosen.id` + `alternatives[].id`（命中时 `chosen` 可为 `null`，
+ *   那就只剩随机挑的那一张）；
+ * - `get_meme_image`：**裸的一张图**，取顶层 `id`，不是 `items`；
+ * - `list_vocab`：不返回图，恒空。
+ *
+ * 本函数**不抛异常**：抽取失败永远不能让工具调用失败（§10.11）。
+ *
+ * 导出是给测试的：`null` 那条分支在真工具上走不到（工具自己不会返回坏形状），
+ * 只能直接喂形状不对的 `structuredContent` 验。
+ */
+export function resultMemeIdsOf(tool: string, result: unknown): string[] | null {
+  if (tool === TOOL_NAMES.listVocab) return []
+
+  const envelope = result as { isError?: unknown; structuredContent?: unknown } | null
+  // 工具回 isError 时没有 structuredContent；记空数组，`outcome` 另算（§10.11）
+  if (envelope?.isError === true) return []
+
+  const structured = envelope?.structuredContent
+  if (typeof structured !== 'object' || structured === null) return null
+  const payload = structured as Record<string, unknown>
+
+  let ids: string[] | null
+  switch (tool) {
+    case TOOL_NAMES.searchMemes:
+    case TOOL_NAMES.randomMeme:
+      ids = idsOf(payload['items'])
+      break
+    case TOOL_NAMES.pickMemeForReply: {
+      const alternatives = idsOf(payload['alternatives'])
+      const chosen = payload['chosen']
+      if (alternatives === null) return null
+      if (chosen === null) {
+        ids = alternatives
+        break
+      }
+      const chosenIds = idsOf([chosen])
+      if (chosenIds === null) return null
+      ids = [...chosenIds, ...alternatives]
+      break
+    }
+    case TOOL_NAMES.getMemeImage: {
+      const id = payload['id']
+      if (typeof id !== 'string') return null
+      ids = [id]
+      break
+    }
+    default:
+      // 工具名不在上面的全集里：说明注册了新工具却没定义抽取规则
+      return null
+  }
+  if (ids === null) return null
+
+  // 顺序照工具输出（相关性 / 抽取顺序本身是信息），去重但**不排序**
+  return [...new Set(ids)].slice(0, MAX_RESULT_MEME_IDS)
+}
+
+/**
  * 给 `registerTool` 套一层审计：每完成一次 `tools/call` 写一行（§10.11）。
  *
  * 为什么包在这里而不是在 `app.ts` 解析响应：工具的**注册名**与 `isError` 只有这一层
@@ -85,8 +172,11 @@ function queryTextOf(tool: string, args: unknown): string | null {
  * - **失败只降级**：写不进去只上报，结果原样返回；工具自己抛的异常照样上抛，只是
  *   先记一行 `error`；
  * - **只记自己的事实**：身份取自 `AuthInfo.extra`（我们自己构造的），不读客户端参数。
+ *
+ * 导出是给测试的：用桩 `McpServer` 就能喂坏形状的 `structuredContent`，验「抽取失败记空数组
+ * 且工具结果原样返回」——真工具自己不会返回坏形状，这条分支只能这么测。
  */
-function withAudit(
+export function withAudit(
   server: McpServer,
   actor: { userId: string; tokenId: string; budgetKey: string },
   requestId: string,
@@ -95,7 +185,40 @@ function withAudit(
   const register = server.registerTool.bind(server)
   type AnyTool = (...args: unknown[]) => Promise<unknown>
 
-  const record = async (tool: string, args: unknown, outcome: 'ok' | 'error'): Promise<void> => {
+  /**
+   * 写一行审计。`result` 只在工具正常返回时传入——抛异常的那条路径没有结果可抽。
+   *
+   * **抽取与写入都不会让工具调用失败**：抽取本身包在 try 里（形状不对只 warn），
+   * 写库失败只上报。这是本函数唯一允许吞异常的地方（§10.11）。
+   */
+  const record = async (
+    tool: string,
+    args: unknown,
+    outcome: 'ok' | 'error',
+    result?: unknown,
+  ): Promise<void> => {
+    let resultMemeIds: string[] = []
+    if (result !== undefined) {
+      try {
+        const extracted = resultMemeIdsOf(tool, result)
+        if (extracted === null) {
+          // ★ 有意降级：上游返回结构变了，记空数组并留下痕迹，不改变工具结果（§10.11）
+          log.warn(
+            { requestId, tokenId: actor.tokenId, tool },
+            'mcp: 审计未能从 structuredContent 抽取 result_meme_ids，记空数组',
+          )
+        } else {
+          resultMemeIds = extracted
+        }
+      } catch (error) {
+        // 防御分支：抽取写坏了（例如 structuredContent 的 getter 抛），同样只 warn
+        log.warn(
+          { requestId, tokenId: actor.tokenId, tool, err: error },
+          'mcp: 审计抽取 result_meme_ids 抛错，记空数组',
+        )
+      }
+    }
+
     try {
       await audit.write({
         userId: actor.userId,
@@ -103,6 +226,7 @@ function withAudit(
         budgetKey: actor.budgetKey,
         tool,
         queryText: queryTextOf(tool, args),
+        resultMemeIds,
         outcome,
       })
     } catch (error) {
@@ -119,7 +243,7 @@ function withAudit(
         const result = await callback(...callArgs)
         const isError = typeof result === 'object' && result !== null
           && (result as { isError?: unknown }).isError === true
-        await record(name, args, isError ? 'error' : 'ok')
+        await record(name, args, isError ? 'error' : 'ok', result)
         return result
       } catch (error) {
         await record(name, args, 'error')

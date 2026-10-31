@@ -36,6 +36,10 @@ export type McpCallLogItemResponse = {
   tokenPrefix: string | null
   /** 他人的行恒为 null，管理员也不例外（§6.11）。 */
   queryText: string | null
+  /** 这次返回了几张图：**两种 `scope` 都返回**（§6.11）。 */
+  resultCount: number
+  /** 他人的行恒为 null，管理员也不例外（§6.11）。 */
+  resultMemeIds: string[] | null
   outcome: string
 }
 
@@ -170,6 +174,8 @@ export const mcpLogRoutes = new Hono<{ Variables: AuthVariables }>()
         tokenName: row.tokenName,
         tokenPrefix: row.tokenPrefix,
         queryText: row.queryText,
+        resultCount: row.resultCount,
+        resultMemeIds: row.resultMemeIds,
         outcome: row.outcome,
       })),
       nextCursor,

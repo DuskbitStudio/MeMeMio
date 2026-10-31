@@ -1,0 +1,1 @@
+ALTER TABLE "mcp_call_logs" ADD COLUMN "result_meme_ids" uuid[] DEFAULT '{}'::uuid[] NOT NULL;
