@@ -18,6 +18,7 @@ import { HomePage } from './routes/home'
 import { BrowsePage } from './routes/browse'
 import { LoginPage } from './routes/login'
 import { RegisterPage } from './routes/register'
+import { OAuthConsentPage } from './routes/oauth-consent'
 import { NotFoundPage } from './routes/not-found'
 import { isSettled } from './features/import/use-import-queue'
 
@@ -309,6 +310,12 @@ export function App() {
           */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          {/*
+            MCP OAuth 同意页（SPEC §10.10.3）：api 的 `/oauth/authorize` 把人 302 到这里。
+            和上面两页同级、不进 `AppLayout`——它是授权流程的中转站，不是产品界面；
+            未登录的回登录页也由页面自己判断（带上带 ticket 的 `next`）。
+          */}
+          <Route path="/oauth/consent" element={<OAuthConsentPage />} />
 
           <Route element={<AppLayout />}>
             <Route element={<RequireAuth />}>

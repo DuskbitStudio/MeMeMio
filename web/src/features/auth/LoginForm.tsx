@@ -6,26 +6,11 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { type ApiError, login, toStateError } from '../../lib/api'
+import { goToNext } from '../../lib/next-navigation'
 import { TOUCH } from '../../lib/touch'
 import { useAuth } from '../../contexts/auth'
 import { AuthError, PasswordField } from './auth-fields'
 import { useCooldown } from './use-cooldown'
-
-/**
- * 只在 `next` 确实是**站内路径**时回跳（state-navigation.md §5 要的那次回跳）。
- *
- * ⚠️ **`next` 是攻击者可控的，不能直接交给 `navigate()`。** `history.pushState` 对
- * 跨源 URL 抛 `SecurityError`，而 `@remix-run/router` 的 `push` 只对 `DataCloneError`
- * 往外抛，其余一律退回 `window.location.assign(url)`（`router.cjs.js` 的 `push`）。
- * 于是 `/login?next=//evil.com` 会在**登录成功之后**把人送到外站——一个刚好在
- * 「刚输完密码、最不设防」那一刻出现的仿冒页。
- *
- * 正则同时挡掉 `/\`：浏览器会把反斜杠归一成斜杠，`/\evil.com` 与 `//evil.com` 等价。
- * 判据是「以单个 `/` 开头」，因为**要保住的是站内那次跳转，不是信任这个参数**。
- */
-function safeNext(raw: string | null): string {
-  return raw && /^\/(?![/\\])/.test(raw) ? raw : '/'
-}
 
 export function LoginForm() {
   const { setUser } = useAuth()
@@ -56,7 +41,9 @@ export function LoginForm() {
     setSubmitting(true)
     try {
       setUser(await login(name, password))
-      navigate(safeNext(searchParams.get('next')), { replace: true })
+      // 不直接 `navigate()`：`/oauth/authorize` 是 api 端点，软跳会落进 NotFoundPage，
+      // 服务端也就没机会签票。分流理由见 `lib/next-navigation.ts`。
+      goToNext(searchParams.get('next'), navigate)
     } catch (err) {
       // 走 `toStateError` 而不是自己分支：断网 / 代理挂掉时也要能读出「连不上服务端」
       // 而不是白屏，那是 `lib/api.ts` 已经收好的一份（http.md §4），别各写各的。

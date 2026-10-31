@@ -47,6 +47,7 @@ import {
 } from '../../components/ui/table'
 import { McpGuideSheet } from './McpGuideSheet'
 import { McpFilterSheet, mcpFilterCount, mcpFilterPreview } from './McpFilterSheet'
+import { McpGrants } from './McpGrants'
 import { McpTokenCreateDialog } from './McpTokenCreateDialog'
 import { McpTokenCreatedDialog } from './McpTokenCreatedDialog'
 import { McpTokenRevokeDialog } from './McpTokenRevokeDialog'
@@ -419,6 +420,12 @@ export function McpSettings() {
           </>
         )}
       </div>
+
+      <Separator />
+
+      {/* 已连接应用（OAuth 授权，SPEC §6.10 / §10.8）。与访问令牌并列：
+          一个是自己的客户端用令牌，一个是第三方客户端走授权，边界不同所以分开列 */}
+      <McpGrants />
 
       <Separator />
 

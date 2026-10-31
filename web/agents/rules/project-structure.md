@@ -78,6 +78,8 @@ src/features/
 | `use-prefetch-share.ts` | `usePrefetchShare()`，触屏那一档在渲染时把原图取好——**只给阅览器与图墙用**，浏览页瀑布流虚拟化会反复重挂，改在「⋯」打开时取（`MemeActions`），见 [clipboard-share.md](clipboard-share.md) |
 | `use-meme-batch.ts` | 「取 N 张」：首页图墙与两条 rail 共用的取数 + 三态，**不分页**（分页只在 `use-browse-list.ts`） |
 | `tag-status.ts` | `tag_status` / `failures[].reason` 的中文映射，**唯一一份**（SPEC §5.2.3、§6.6.1） |
+| `safe-next.ts` | `safeNext()`，登录页 `?next=` 的**唯一出口**，白名单只放行站内相对路径 |
+| `next-navigation.ts` | `needsDocumentLoad()` / `goToNext()`，第二个出口：判「用什么方式去」——`/oauth/authorize` 是 api 端点，软跳会落进 NotFoundPage 且服务端不签票，必须整页导航；其余仍走 SPA。见 [http.md](http.md)「服务端自己管的地址」 |
 | `touch.ts` | `TOUCH = 'min-h-11'`，触摸目标 44px 的**唯一落点**，见 [styling.md](styling.md) |
 
 > `use-mobile.ts` 是 `npx shadcn add sidebar` 拉下来的，**落点是 `components.json` 的

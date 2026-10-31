@@ -40,6 +40,35 @@ export default defineConfig({
         target: process.env.MEMEMIO_API_PROXY ?? 'http://localhost:3000',
         changeOrigin: false,
       },
+      // OAuth 2.1 授权服务器（SPEC §10.10）。生产上这些路径由 api 在同一 origin 提供，
+      // 本地不代理的话整条授权流程（发现 → 注册 → 授权 → 换令牌）只能在生产上试。
+      //
+      // 三份发现文档：客户端在 401 之后按 `resource_metadata` 自己去取，缺一份就有一部分
+      // 客户端发现失败（§10.10.7）。
+      '/.well-known': {
+        target: process.env.MEMEMIO_API_PROXY ?? 'http://localhost:3000',
+        changeOrigin: false,
+      },
+      // ⚠️ **不能写成一条 `/oauth` 前缀**：SPA 自己的同意页就是 `/oauth/consent`
+      // （§10.10.3 里 302 的目标），前缀代理会把它也转给 api，本地打开同意页直接
+      // 落到 api 的 404，而且报错离根因很远。这里只列协议端点，逐个写死。
+      // 同意页背后的管理端点（`/api/v1/oauth/*`）由上面那条 `/api` 覆盖。
+      '/oauth/authorize': {
+        target: process.env.MEMEMIO_API_PROXY ?? 'http://localhost:3000',
+        changeOrigin: false,
+      },
+      '/oauth/token': {
+        target: process.env.MEMEMIO_API_PROXY ?? 'http://localhost:3000',
+        changeOrigin: false,
+      },
+      '/oauth/register': {
+        target: process.env.MEMEMIO_API_PROXY ?? 'http://localhost:3000',
+        changeOrigin: false,
+      },
+      '/oauth/revoke': {
+        target: process.env.MEMEMIO_API_PROXY ?? 'http://localhost:3000',
+        changeOrigin: false,
+      },
     },
   },
   build: {

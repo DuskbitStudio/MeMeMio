@@ -144,7 +144,7 @@ export function setUnauthenticatedHandler(fn: (() => void) | null): void {
  * 会话过期的拦截器、设置页保存时都用它，各写一份迟早会有一份忘了带 `next`。
  *
  * ⚠️ **`next` 是攻击者可控的，回跳前必须在登录页校验。** 那道闸门是
- * `features/auth/LoginForm.tsx` 的 `safeNext`（挡 `//evil.com` 这类跨源），
+ * `lib/safe-next.ts` 的 `safeNext`（挡 `//evil.com` 这类跨源），
  * 这里只负责生成，不负责信任。
  */
 export function loginPath(from: string): string {
@@ -651,4 +651,84 @@ export async function updateMcpFilter(excluded: McpFilterValues): Promise<McpFil
   const res = await api.api.v1.mcp.filter.$put({ json: { excluded } })
   if (!res.ok) throw await toApiError(res)
   return (await res.json()).excluded
+}
+
+// --- MCP OAuth 同意与已连接应用（SPEC §6.10 / §10.10.4） -------------------
+
+type OAuthClient = typeof api.api.v1.oauth
+
+/**
+ * 同意页要展示的信息（`GET /api/v1/oauth/authorize/{ticket}`）。形状从 `AppType` 推，
+ * 不手写——api 改字段名这里跟着编译失败，这正是这条链路的用处。
+ *
+ * 但**类型只保证形状，SPEC 保证含义**：`clientId` 是展示用的、`redirectHost` 是服务端
+ * 从 `redirect_uri` 取好的**主机名**（不是完整 URL）、`scope` 目前只有一个值。
+ * 「ticket 无效 / 过期 / 已用 / 不属于本人统一 `NOT_FOUND`」也推不出来。
+ */
+export type OAuthAuthorization = InferResponseType<OAuthClient['authorize'][':ticket']['$get']>
+
+/** `POST` 的响应：`{ redirectTo }`，服务端拼好的完整回跳地址。 */
+export type OAuthDecision = InferResponseType<OAuthClient['authorize'][':ticket']['$post']>
+
+/**
+ * 「已连接应用」的一条授权（`GET /api/v1/oauth/grants` 的 `items[number]`）。
+ *
+ * **列表里没有任何令牌值或前缀**（§6.10「API Key 不出响应」在这里更严）：用户按应用名
+ * 识别授权，不按令牌串识别。`lastUsedAt` / `expiresAt` 可以为 `null`
+ * （还没用过 / 刷新令牌已清），界面必须认得这两种空。
+ */
+export type OAuthGrant = InferResponseType<OAuthClient['grants']['$get']>['items'][number]
+
+/**
+ * 读同意页信息。
+ *
+ * 调用点把 `NOT_FOUND` 映射成 §10.8「授权同意 · 失效」。cookie 会话鉴权：
+ * **不带任何 Authorization**——这四个端点连自己签发的访问令牌都不认（§6.10）。
+ */
+export async function fetchOAuthAuthorization(ticket: string): Promise<OAuthAuthorization> {
+  const res = await api.api.v1.oauth.authorize[':ticket'].$get({ param: { ticket } })
+  if (!res.ok) throw await toApiError(res)
+  return res.json()
+}
+
+/**
+ * 提交同意或拒绝。
+ *
+ * 请求体**恰好** `{ decision }`（§6.10：多一个字段就是 `VALIDATION_FAILED`）。
+ * 响应里的 `redirectTo` 是**服务端拼好的完整回跳地址**，调用方只做 `location.assign`
+ * ——不拼参数、不读、不存授权码。ticket 单次使用：重复提交回 `NOT_FOUND`。
+ */
+export async function submitOAuthDecision(
+  ticket: string,
+  decision: 'approve' | 'deny',
+): Promise<OAuthDecision> {
+  const res = await api.api.v1.oauth.authorize[':ticket'].$post({
+    param: { ticket },
+    json: { decision },
+  })
+  if (!res.ok) throw await toApiError(res)
+  return res.json()
+}
+
+/** 读已连接应用（`GET /api/v1/oauth/grants`），服务端已按 `createdAt desc` 排好。 */
+export async function fetchOAuthGrants(): Promise<OAuthGrant[]> {
+  const res = await api.api.v1.oauth.grants.$get()
+  if (!res.ok) throw await toApiError(res)
+  return (await res.json()).items
+}
+
+/**
+ * 撤销一条授权（`DELETE /api/v1/oauth/grants/{id}`）。
+ *
+ * 成功是 `204` 无响应体。**`NOT_FOUND` 当成功处理**，理由同 `revokeAccessToken`：
+ * 另一个标签页已经撤过、或本地列表过期时，调用方要的结果都是「让这一行消失」。
+ * 撤销立即生效——客户端下一次 `/mcp` 请求就是 401（这条类型推不出来，靠联合验收）。
+ */
+export async function revokeOAuthGrant(id: string): Promise<void> {
+  const res = await api.api.v1.oauth.grants[':id'].$delete({ param: { id } })
+  if (res.ok) return
+
+  const err = await toApiError(res)
+  if (err.code === 'NOT_FOUND') return
+  throw err
 }
